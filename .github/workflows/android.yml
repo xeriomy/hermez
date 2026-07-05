@@ -31,7 +31,7 @@ jobs:
           cache-key: android-sdk-${{ runner.os }}-${{ hashFiles('gradle/wrapper/gradle-wrapper.properties') }}
 
       - name: Build debug APK
-        run: ./gradlew :app:assembleDebug --stacktrace
+        run: ./gradlew :app:assembleDebug --stacktrace --info 2>&1 | tail -200
 
       - name: Build release APK
         run: ./gradlew :app:assembleRelease --stacktrace
