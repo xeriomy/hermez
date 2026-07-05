@@ -21,14 +21,6 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v3
 
-      - name: Install Gradle
-        uses: gradle/gradle-build-action@v2
-        with:
-          gradle-version: 8.9
-
-      - name: Generate Gradle wrapper
-        run: gradle wrapper --gradle-version 8.9
-
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
         with:
@@ -38,24 +30,8 @@ jobs:
           build-tools: "34.0.0"
           cache-key: android-sdk-${{ runner.os }}-${{ hashFiles('gradle/wrapper/gradle-wrapper.properties') }}
 
-      - name: Print SDK info
-        run: |
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          ls -la $ANDROID_HOME
-          ls -la $ANDROID_HOME/platforms
-          ls -la $ANDROID_HOME/build-tools
-          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --list | head -50
-
       - name: Build debug APK
-        run: ./gradlew :app:assembleDebug --stacktrace --info 2>&1 | tee build.log
-
-      - name: Upload build log
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-debug-log
-          path: build.log
-          retention-days: 7
+        run: ./gradlew :app:assembleDebug --stacktrace --info 2>&1
 
       - name: Upload debug APK artifact
         uses: actions/upload-artifact@v4
@@ -65,8 +41,7 @@ jobs:
           retention-days: 7
 
       - name: Build release APK
-        run: |
-          ./gradlew :app:assembleRelease --stacktrace --info 2>&1 || echo "Release build failed (expected without signing config)"
+        run: ./gradlew :app:assembleRelease --stacktrace --info 2>&1 || echo "Release build failed (signing config missing)"
 
       - name: Upload release APK artifact
         uses: actions/upload-artifact@v4
