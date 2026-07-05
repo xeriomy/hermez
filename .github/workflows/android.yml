@@ -39,7 +39,15 @@ jobs:
           $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --list | head -50
 
       - name: Build debug APK
-        run: ./gradlew :app:assembleDebug --stacktrace --info 2>&1
+        run: ./gradlew :app:assembleDebug --stacktrace --info 2>&1 | tee build.log
+
+      - name: Upload build log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-debug-log
+          path: build.log
+          retention-days: 7
 
       - name: Upload debug APK artifact
         uses: actions/upload-artifact@v4
