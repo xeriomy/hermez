@@ -9,8 +9,10 @@ import dev.hermes.core.data.local.SessionEntity
 import dev.hermes.core.network.ApiEndpoint
 import dev.hermes.core.network.HttpClientProvider
 import io.ktor.client.*
+import io.ktor.client.call.body
 import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.request.*
+import io.ktor.client.statement.*
 import io.ktor.http.*
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -29,18 +31,18 @@ class SessionRepository(application: Application, private val serverUrl: String)
     fun getMessages(sessionId: String, limit: Int = 50): Flow<List<MessageEntity>> = db.messageDao().getMessages(sessionId, limit)
 
     suspend fun refreshSessions(): Result<List<SessionEntity>> = runCatching {
-        val response = client.get<SessionsResponse>(ApiEndpoint.Sessions.path)
+        val response = client.get(ApiEndpoint.Sessions.path)
         if (!response.status.isSuccess()) throw Exception("Failed to refresh sessions: ${response.status}")
-        val sessions = response.body()?.sessions ?: emptyList()
+        val sessions = response.body<SessionsResponse>().sessions
         val entities = sessions.map { it.toEntity() }
         db.sessionDao().insertSessions(entities)
         entities
     }
 
     suspend fun loadSession(sessionId: String, msgLimit: Int = 50): Result<SessionEntity> = runCatching {
-        val response = client.get<SessionDetailResponse>("${ApiEndpoint.SessionDetail.path}?session_id=$sessionId&messages=1&msg_limit=$msgLimit")
+        val response = client.get("${ApiEndpoint.SessionDetail.path}?session_id=$sessionId&messages=1&msg_limit=$msgLimit")
         if (!response.status.isSuccess()) throw Exception("Failed to load session: ${response.status}")
-        val session = response.body()?.session ?: throw Exception("Session not found")
+        val session = response.body<SessionDetailResponse>().session ?: throw Exception("Session not found")
         val entity = session.toEntity()
         db.sessionDao().insertSession(entity)
         session.messages?.forEach { msg ->
@@ -50,12 +52,12 @@ class SessionRepository(application: Application, private val serverUrl: String)
     }
 
     suspend fun createSession(workspace: String?, model: String?, modelProvider: String?, profile: String?): Result<SessionEntity> = try {
-        val response = client.post<CreateSessionResponse>(ApiEndpoint.SessionNew.path) {
+        val response = client.post(ApiEndpoint.SessionNew.path) {
             contentType(ContentType.Application.Json)
             setBody(CreateSessionRequest(workspace, model, modelProvider, profile))
         }
         if (response.status.isSuccess()) {
-            val session = response.body()?.session ?: throw Exception("No session returned")
+            val session = response.body<CreateSessionResponse>().session ?: throw Exception("No session returned")
             val entity = session.toEntity()
             db.sessionDao().insertSession(entity)
             Result.success(entity)

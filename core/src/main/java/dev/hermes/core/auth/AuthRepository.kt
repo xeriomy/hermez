@@ -2,7 +2,8 @@ package dev.hermes.core.auth
 
 import android.content.Context
 import androidx.lifecycle.ViewModel
-import androidx.lifecycle.viewModelScope
+import androidx.security.crypto.EncryptedSharedPreferences
+import androidx.security.crypto.MasterKey
 import dev.hermes.core.auth.AuthState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -33,19 +34,19 @@ class AuthRepository(context: Context) : ViewModel() {
     }
 }
 
-class AuthPrefsRepository(private val context: Context) {
-    private val masterKeyAlias = androidx.security.crypto.MasterKeys.getOrCreate(
-        androidx.security.crypto.MasterKeys.AES256_GCM_SPEC
-    )
-    private val encryptedPrefs = androidx.security.crypto.EncryptedSharedPreferences.create(
-        "hermes_auth_prefs",
-        masterKeyAlias,
-        context,
-        androidx.security.crypto.EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-        androidx.security.crypto.EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-    )
+class AuthPrefsRepository(context: Context) {
 
-    private const val KEY_SERVER_URL = "server_url"
+    private val masterKey = MasterKey.Builder(context)
+        .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+        .build()
+
+    private val encryptedPrefs = EncryptedSharedPreferences.create(
+        context,
+        "hermes_auth_prefs",
+        masterKey,
+        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+    )
 
     fun saveServerUrl(url: String) {
         encryptedPrefs.edit().putString(KEY_SERVER_URL, url).apply()
@@ -57,5 +58,9 @@ class AuthPrefsRepository(private val context: Context) {
 
     fun clearServerUrl() {
         encryptedPrefs.edit().remove(KEY_SERVER_URL).apply()
+    }
+
+    companion object {
+        private const val KEY_SERVER_URL = "server_url"
     }
 }

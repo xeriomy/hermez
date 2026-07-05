@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+        Hermex base theme.
+        Uses Material3 via Compose — the Activity itself only needs a NoActionBar
+        Material3 parent so the status bar / window background behave on API 24+.
+    -->
+    <style name="Theme.Hermex" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowBackground">@android:color/white</item>
+    </style>
+</resources>

@@ -1,6 +1,7 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+    id("org.jetbrains.kotlin.plugin.compose")
     id("com.google.devtools.ksp")
 }
 
@@ -18,6 +19,21 @@ android {
         vectorDrawables.useSupportLibrary = true
     }
 
+    signingConfigs {
+        create("release") {
+            val keystoreFile = providers.environmentVariable("HERMES_KEYSTORE_FILE").orNull
+            val keystorePassword = providers.environmentVariable("HERMES_KEYSTORE_PASSWORD").orNull
+            val keyAlias = providers.environmentVariable("HERMES_KEY_ALIAS").orNull
+            val keyPassword = providers.environmentVariable("HERMES_KEY_PASSWORD").orNull
+            if (keystoreFile != null && keystorePassword != null && keyAlias != null && keyPassword != null) {
+                this.storeFile = file(keystoreFile)
+                this.storePassword = keystorePassword
+                this.keyAlias = keyAlias
+                this.keyPassword = keyPassword
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
@@ -26,6 +42,24 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            // Signing config is wired from env vars (HERMES_KEYSTORE_FILE,
+            // HERMES_KEYSTORE_PASSWORD, HERMES_KEY_ALIAS, HERMES_KEY_PASSWORD)
+            // when present — typically by CI. Absent locally, the release
+            // build falls back to the debug signing config so the artifact
+            // is still installable on emulators.
+            val releaseSigning = signingConfigs.findByName("release")
+            signingConfig = if ((releaseSigning?.storeFile ?: null) != null) releaseSigning!! else signingConfigs.getByName("debug")
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_21
+        targetCompatibility = JavaVersion.VERSION_21
+    }
+
+    kotlin {
+        compilerOptions {
+            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21)
         }
     }
 
@@ -33,8 +67,6 @@ android {
         buildConfig = true
         compose = true
     }
-
-    composeOptions.kotlinCompilerExtensionVersion = "2.0.21"
 
     packaging.resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
 }
@@ -48,10 +80,13 @@ dependencies {
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.activity:activity-compose:1.9.2")
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.4")
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.4")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.4")
+    implementation("androidx.navigation:navigation-compose:2.8.0")
 
     // Image/media
     implementation("io.coil-kt:coil-compose:2.6.0")

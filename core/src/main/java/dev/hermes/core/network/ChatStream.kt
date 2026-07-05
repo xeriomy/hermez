@@ -1,17 +1,29 @@
 package dev.hermes.core.network
 
-import io.ktor.client.*
-import io.ktor.client.plugins.contentnegotiation.*
-import io.ktor.client.plugins.cookies.*
-import io.ktor.client.plugins.sse.*
-import io.ktor.client.request.*
-import io.ktor.client.statement.*
-import io.ktor.http.*
-import io.ktor.serialization.kotlinx.json.*
-import kotlinx.coroutines.channels.ReceiveChannel
+import io.ktor.client.HttpClient
+import io.ktor.client.call.body
+import io.ktor.client.engine.okhttp.OkHttp
+import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.client.plugins.cookies.AcceptAllCookiesStorage
+import io.ktor.client.plugins.cookies.HttpCookies
+import io.ktor.client.plugins.defaultRequest
+import io.ktor.client.plugins.sse.SSE
+import io.ktor.client.plugins.sse.sse
+import io.ktor.client.request.get
+import io.ktor.client.request.parameter
+import io.ktor.client.request.post
+import io.ktor.client.request.setBody
+import io.ktor.client.statement.HttpResponse
+import io.ktor.http.ContentType
+import io.ktor.http.HttpHeaders
+import io.ktor.http.contentType
+import io.ktor.http.isSuccess
+import io.ktor.serialization.kotlinx.json.json
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
-import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -20,6 +32,7 @@ class ChatStream(
     private val baseClient: HttpClient = HttpClientProvider.create(serverUrl)
 ) {
 
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     private val sseClient = HttpClient(OkHttp) {
         expectSuccess = false
         install(ContentNegotiation) {
@@ -28,10 +41,11 @@ class ChatStream(
         install(HttpCookies) {
             storage = AcceptAllCookiesStorage()
         }
+        install(SSE)
         defaultRequest {
             url(serverUrl)
             headers.remove(HttpHeaders.Origin)
-            headers.remove(HttpHeaders.Referer)
+            headers.remove("Referer")
         }
     }
 
@@ -60,12 +74,12 @@ class ChatStream(
 
     suspend fun startChat(request: ChatStartRequest): Result<ChatStartResponse> {
         return try {
-            val response = baseClient.post<ChatStartResponse>(ApiEndpoint.ChatStart.path) {
+            val response: HttpResponse = baseClient.post(ApiEndpoint.ChatStart.path) {
                 contentType(ContentType.Application.Json)
                 setBody(request)
             }
             if (response.status.isSuccess()) {
-                Result.success(response.body()!!)
+                Result.success(response.body())
             } else {
                 Result.failure(Exception("Start chat failed: ${response.status}"))
             }
@@ -80,37 +94,34 @@ class ChatStream(
 
         while (reconnectAttempts < maxReconnectAttempts) {
             try {
-                val events = sseClient.sse(ApiEndpoint.ChatStream.path) {
-                    parameter("stream_id", streamId)
-                    onEvent { event ->
-                        val data = event.data ?: return@onEvent
-                        val eventName = event.type ?: "unknown"
+                sseClient.sse(
+                    ApiEndpoint.ChatStream.path,
+                    request = { parameter("stream_id", streamId) }
+                ) {
+                    // `this` is ClientSSESession. `incoming` is a Flow<ServerSentEvent>.
+                    incoming.collect { event ->
+                        val data = event.data ?: return@collect
+                        if (data.isEmpty()) return@collect
+                        val eventName = event.event ?: "unknown"
                         val parsed = parseSseEvent(eventName, data, streamId)
                         if (parsed != null) {
                             trySend(parsed)
                         }
                     }
-                    onCompletion { cause ->
-                        if (cause != null) {
-                            throw cause
-                        }
-                    }
                 }
-                // Wait for the SSE connection to complete
-                events.join()
                 reconnectAttempts = maxReconnectAttempts // Exit loop on clean completion
             } catch (e: Exception) {
                 reconnectAttempts++
                 if (reconnectAttempts < maxReconnectAttempts) {
                     // Exponential backoff: 1s, 2s, 4s
-                    val delay = (1000 * Math.pow(2.0, (reconnectAttempts - 1).toDouble())).toLong()
-                    kotlinx.coroutines.delay(delay)
+                    val delayMs = (1000L * (1L shl (reconnectAttempts - 1)))
+                    delay(delayMs)
                 } else {
                     trySend(StreamEvent.Error(e.message ?: "Stream failed after retries", streamId))
                 }
             }
         }
-    }.flowOn(kotlinx.coroutines.Dispatchers.IO)
+    }.flowOn(Dispatchers.IO)
 
     suspend fun cancelStream(streamId: String): Result<Unit> {
         return try {
@@ -129,11 +140,9 @@ class ChatStream(
 
     suspend fun reattachStream(streamId: String): Result<StreamStatusResponse> {
         return try {
-            val response = baseClient.get<StreamStatusResponse>(
-                "${ApiEndpoint.ChatStreamStatus.path}?stream_id=$streamId"
-            )
+            val response = baseClient.get("${ApiEndpoint.ChatStreamStatus.path}?stream_id=$streamId")
             if (response.status.isSuccess()) {
-                Result.success(response.body()!!)
+                Result.success(response.body())
             } else {
                 Result.failure(Exception("Reattach failed: ${response.status}"))
             }
@@ -143,37 +152,18 @@ class ChatStream(
     }
 
     private fun parseSseEvent(eventName: String, data: String, streamId: String): StreamEvent? {
+        val json = Json { ignoreUnknownKeys = true }
         return when (eventName) {
-            "token" -> {
-                Json { ignoreUnknownKeys = true }.decodeFromString<StreamEvent.Token>(data)
-            }
-            "tool" -> {
-                Json { ignoreUnknownKeys = true }.decodeFromString<StreamEvent.Tool>(data)
-            }
-            "tool_complete" -> {
-                Json { ignoreUnknownKeys = true }.decodeFromString<StreamEvent.ToolComplete>(data)
-            }
-            "reasoning" -> {
-                Json { ignoreUnknownKeys = true }.decodeFromString<StreamEvent.Reasoning>(data)
-            }
-            "title" -> {
-                Json { ignoreUnknownKeys = true }.decodeFromString<StreamEvent.Title>(data)
-            }
-            "done" -> {
-                Json { ignoreUnknownKeys = true }.decodeFromString<StreamEvent.Done>(data)
-            }
-            "interim_assistant" -> {
-                Json { ignoreUnknownKeys = true }.decodeFromString<StreamEvent.InterimAssistant>(data)
-            }
-            "stream_end" -> {
-                Json { ignoreUnknownKeys = true }.decodeFromString<StreamEvent.StreamEnd>(data)
-            }
-            "error" -> {
-                Json { ignoreUnknownKeys = true }.decodeFromString<StreamEvent.Error>(data)
-            }
-            else -> {
-                StreamEvent.Unknown(eventName, data, streamId)
-            }
+            "token" -> json.decodeFromString<StreamEvent.Token>(data)
+            "tool" -> json.decodeFromString<StreamEvent.Tool>(data)
+            "tool_complete" -> json.decodeFromString<StreamEvent.ToolComplete>(data)
+            "reasoning" -> json.decodeFromString<StreamEvent.Reasoning>(data)
+            "title" -> json.decodeFromString<StreamEvent.Title>(data)
+            "done" -> json.decodeFromString<StreamEvent.Done>(data)
+            "interim_assistant" -> json.decodeFromString<StreamEvent.InterimAssistant>(data)
+            "stream_end" -> json.decodeFromString<StreamEvent.StreamEnd>(data)
+            "error" -> json.decodeFromString<StreamEvent.Error>(data)
+            else -> StreamEvent.Unknown(eventName, data, streamId)
         }
     }
 

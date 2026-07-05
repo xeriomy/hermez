@@ -1,0 +1,168 @@
+name: Release APK
+
+# Triggered by version tags (v0.2.0, v1.0.0-rc1, ...) OR manual dispatch.
+# Produces a signed release APK and publishes a GitHub Release with the APK
+# attached.
+#
+# Required repository secrets:
+#   HERMES_KEYSTORE_BASE64   base64-encoded .jks keystore
+#   HERMES_KEYSTORE_PASSWORD keystore password
+#   HERMES_KEY_ALIAS         key alias inside the keystore
+#   HERMES_KEY_PASSWORD      password for that key alias
+#
+# Optional repository variables (Settings → Secrets and variables → Actions → Variables):
+#   RELEASE_NOTES_PATH       path to a markdown file whose contents become the
+#                            release body (default: CHANGELOG.md if present)
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to publish (must already exist)"
+        required: true
+        type: string
+
+permissions:
+  contents: write   # needed by softprops/action-gh-release to create the release
+
+env:
+  GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dorg.gradle.caching=true -Dorg.gradle.configuration-cache=true"
+  JAVA_DISTRIBUTION: temurin
+  JAVA_VERSION: "21"
+
+jobs:
+  release:
+    name: Build & Publish Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Resolve tag
+        id: tag
+        run: |
+          if [[ "${{ inputs.tag }}" != "" ]]; then
+            echo "name=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.name }}
+          fetch-depth: 1
+
+      - name: Set up JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          api-level: 35
+          build-tools: "35.0.0"
+          ndk: false
+          emulator: false
+          cache-key: android-sdk-${{ runner.os }}-${{ hashFiles('gradle/wrapper/gradle-wrapper.properties') }}
+
+      - name: Validate Gradle wrapper
+        uses: gradle/actions/wrapper-validation@v4
+
+      - name: Decode signing keystore
+        env:
+          HERMES_KEYSTORE_BASE64: ${{ secrets.HERMES_KEYSTORE_BASE64 }}
+        run: |
+          if [[ -z "$HERMES_KEYSTORE_BASE64" ]]; then
+            echo "::error::HERMES_KEYSTORE_BASE64 secret is required for release builds"
+            exit 1
+          fi
+          echo "$HERMES_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/hermes.jks"
+          echo "HERMES_KEYSTORE_FILE=$RUNNER_TEMP/hermes.jks" >> "$GITHUB_ENV"
+
+      - name: Assemble signed release APK
+        env:
+          HERMES_KEYSTORE_PASSWORD: ${{ secrets.HERMES_KEYSTORE_PASSWORD }}
+          HERMES_KEY_ALIAS: ${{ secrets.HERMES_KEY_ALIAS }}
+          HERMES_KEY_PASSWORD: ${{ secrets.HERMES_KEY_PASSWORD }}
+        run: ./gradlew :app:assembleRelease --stacktrace
+
+      - name: Rename APK to include tag
+        id: artifact
+        run: |
+          set -euo pipefail
+          tag="${{ steps.tag.outputs.name }}"
+          src="app/build/outputs/apk/release/app-release.apk"
+          if [[ ! -f "$src" ]]; then
+            src="app/build/outputs/apk/release/app-release-unsigned.apk"
+            if [[ ! -f "$src" ]]; then
+              echo "::error::No release APK produced"
+              exit 1
+            fi
+            echo "::warning::Falling back to unsigned APK — signing secrets may be incomplete"
+          fi
+          dst="hermex-${tag}.apk"
+          cp "$src" "$dst"
+          echo "path=$dst" >> "$GITHUB_OUTPUT"
+          echo "name=$dst" >> "$GITHUB_OUTPUT"
+
+      - name: Generate SHA-256 checksum
+        id: checksum
+        run: |
+          dst="${{ steps.artifact.outputs.path }}"
+          sha256sum "$dst" > "$dst.sha256"
+          echo "path=$dst.sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Read release notes
+        id: notes
+        run: |
+          notes_file=""
+          if [[ -n "${{ vars.RELEASE_NOTES_PATH }}" && -f "${{ vars.RELEASE_NOTES_PATH }}" ]]; then
+            notes_file="${{ vars.RELEASE_NOTES_PATH }}"
+          elif [[ -f "CHANGELOG.md" ]]; then
+            notes_file="CHANGELOG.md"
+          fi
+          if [[ -n "$notes_file" ]]; then
+            {
+              echo "body<<EOF"
+              cat "$notes_file"
+              echo ""
+              echo ""
+              echo "## Checksum"
+              echo ""
+              echo '```'
+              cat "${{ steps.checksum.outputs.path }}"
+              echo '```'
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+          else
+            sha=$(awk '{print $1}' "${{ steps.checksum.outputs.path }}")
+            {
+              echo "body<<EOF"
+              echo "## Checksum"
+              echo ""
+              echo '```'
+              echo "$sha  ${{ steps.artifact.outputs.name }}"
+              echo '```'
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.name }}
+          name: ${{ steps.tag.outputs.name }}
+          body: ${{ steps.notes.outputs.body }}
+          draft: false
+          prerelease: ${{ contains(steps.tag.outputs.name, '-') }}
+          fail_on_unmatched_files: true
+          files: |
+            ${{ steps.artifact.outputs.path }}
+            ${{ steps.checksum.outputs.path }}

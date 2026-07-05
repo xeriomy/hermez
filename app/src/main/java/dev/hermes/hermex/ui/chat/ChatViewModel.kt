@@ -4,6 +4,7 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.hermes.core.auth.AuthRepository
+import dev.hermes.core.auth.AuthState
 import dev.hermes.core.data.SessionRepository
 import dev.hermes.core.network.ChatStream
 import kotlinx.coroutines.Job
@@ -118,11 +119,12 @@ class ChatViewModel(
                             }
                             _messages.value = updated
                         }
-                        ChatStream.StreamEvent.Done -> Unit
-                        ChatStream.StreamEvent.StreamEnd -> Unit
+                        is ChatStream.StreamEvent.Done -> Unit
+                        is ChatStream.StreamEvent.StreamEnd -> Unit
                         is ChatStream.StreamEvent.Error -> {
                             _error.value = event.message ?: "Stream error"
                         }
+                        else -> Unit
                     }
                 }
             } catch (e: Exception) {
