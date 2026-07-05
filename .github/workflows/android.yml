@@ -24,11 +24,19 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
         with:
-          api-level: 35
+          api-level: 34
           ndk-version: r27b
           emulator: false
-          build-tools: "35.0.0"
+          build-tools: "34.0.0"
           cache-key: android-sdk-${{ runner.os }}-${{ hashFiles('gradle/wrapper/gradle-wrapper.properties') }}
+
+      - name: Print SDK info
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          ls -la $ANDROID_HOME
+          ls -la $ANDROID_HOME/platforms
+          ls -la $ANDROID_HOME/build-tools
+          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --list | head -50
 
       - name: Build debug APK
         run: ./gradlew :app:assembleDebug --stacktrace --info 2>&1
