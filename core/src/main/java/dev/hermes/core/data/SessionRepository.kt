@@ -1,6 +1,8 @@
 package dev.hermes.core.data
 
-import android.content.Context
+import android.app.Application
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import dev.hermes.core.data.local.AppDatabase
 import dev.hermes.core.data.local.MessageEntity
 import dev.hermes.core.data.local.SessionEntity
@@ -15,186 +17,137 @@ import kotlinx.coroutines.flow.map
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
-class SessionRepository(private val context: Context, private val serverUrl: String) {
-
+class SessionRepository(application: Application, private val serverUrl: String) : ViewModel() {
+    private val context = application.applicationContext
     private val db = AppDatabase.getInstance(context)
     private val client = HttpClientProvider.create(serverUrl)
 
-    fun getActiveSessions(): Flow<List<SessionEntity>> {
-        return db.sessionDao().getActiveSessions()
+    fun getActiveSessions(): Flow<List<SessionEntity>> = db.sessionDao().getActiveSessions()
+    fun getArchivedSessions(): Flow<List<SessionEntity>> = db.sessionDao().getArchivedSessions()
+    fun getSessionsByProject(projectId: String): Flow<List<SessionEntity>> = db.sessionDao().getSessionsByProject(projectId)
+
+    fun getMessages(sessionId: String, limit: Int = 50): Flow<List<MessageEntity>> = db.messageDao().getMessages(sessionId, limit)
+
+    suspend fun refreshSessions(): Result<List<SessionEntity>> = runCatching {
+        val response = client.get<SessionsResponse>(ApiEndpoint.Sessions.path)
+        if (!response.status.isSuccess()) throw Exception("Failed to refresh sessions: ${response.status}")
+        val sessions = response.body()?.sessions ?: emptyList()
+        val entities = sessions.map { it.toEntity() }
+        db.sessionDao().insertSessions(entities)
+        entities
     }
 
-    fun getArchivedSessions(): Flow<List<SessionEntity>> {
-        return db.sessionDao().getArchivedSessions()
-    }
-
-    fun getSessionsByProject(projectId: String): Flow<List<SessionEntity>> {
-        return db.sessionDao().getSessionsByProject(projectId)
-    }
-
-    fun getMessages(sessionId: String, limit: Int = 50): Flow<List<MessageEntity>> {
-        return db.messageDao().getMessages(sessionId, limit)
-    }
-
-    suspend fun refreshSessions(): Result<List<SessionEntity>> {
-        return try {
-            val response = client.get<SessionsResponse>(ApiEndpoint.Sessions.path)
-            if (response.status.isSuccess()) {
-                val sessions = response.body()?.sessions ?: emptyList()
-                val entities = sessions.map { it.toEntity() }
-                db.sessionDao().insertSessions(entities)
-                Result.success(entities)
-            } else {
-                Result.failure(Exception("Failed to refresh sessions: ${response.status}"))
-            }
-        } catch (e: Exception) {
-            Result.failure(e)
+    suspend fun loadSession(sessionId: String, msgLimit: Int = 50): Result<SessionEntity> = runCatching {
+        val response = client.get<SessionDetailResponse>("${ApiEndpoint.SessionDetail.path}?session_id=$sessionId&messages=1&msg_limit=$msgLimit")
+        if (!response.status.isSuccess()) throw Exception("Failed to load session: ${response.status}")
+        val session = response.body()?.session ?: throw Exception("Session not found")
+        val entity = session.toEntity()
+        db.sessionDao().insertSession(entity)
+        session.messages?.forEach { msg ->
+            db.messageDao().insertMessage(msg.toEntity(sessionId))
         }
+        entity
     }
 
-    suspend fun loadSession(sessionId: String, msgLimit: Int = 50): Result<SessionEntity> {
-        return try {
-            val response = client.get<SessionDetailResponse>(
-                "${ApiEndpoint.SessionDetail.path}?session_id=$sessionId&messages=1&msg_limit=$msgLimit"
-            )
-            if (response.status.isSuccess()) {
-                val session = response.body()?.session
-                if (session != null) {
-                    val entity = session.toEntity()
-                    db.sessionDao().insertSession(entity)
-                    session.messages?.forEach { msg ->
-                        db.messageDao().insertMessage(msg.toEntity(sessionId))
-                    }
-                    Result.success(entity)
-                } else {
-                    Result.failure(Exception("Session not found"))
-                }
-            } else {
-                Result.failure(Exception("Failed to load session: ${response.status}"))
-            }
-        } catch (e: Exception) {
-            Result.failure(e)
+    suspend fun createSession(workspace: String?, model: String?, modelProvider: String?, profile: String?): Result<SessionEntity> = try {
+        val response = client.post<CreateSessionResponse>(ApiEndpoint.SessionNew.path) {
+            contentType(ContentType.Application.Json)
+            setBody(CreateSessionRequest(workspace, model, modelProvider, profile))
         }
-    }
-
-    suspend fun createSession(
-        workspace: String?,
-        model: String?,
-        modelProvider: String?,
-        profile: String?
-    ): Result<SessionEntity> {
-        return try {
-            val request = CreateSessionRequest(workspace, model, modelProvider, profile)
-            val response = client.post<CreateSessionResponse>(ApiEndpoint.SessionNew.path) {
-                contentType(ContentType.Application.Json)
-                setBody(request)
-            }
-            if (response.status.isSuccess()) {
-                val session = response.body()?.session
-                if (session != null) {
-                    val entity = session.toEntity()
-                    db.sessionDao().insertSession(entity)
-                    Result.success(entity)
-                } else {
-                    Result.failure(Exception("No session returned"))
-                }
-            } else {
-                Result.failure(Exception("Failed to create session: ${response.status}"))
-            }
-        } catch (e: Exception) {
-            Result.failure(e)
+        if (response.status.isSuccess()) {
+            val session = response.body()?.session ?: throw Exception("No session returned")
+            val entity = session.toEntity()
+            db.sessionDao().insertSession(entity)
+            Result.success(entity)
+        } else {
+            Result.failure(Exception("Failed to create session: ${response.status}"))
         }
+    } catch (e: Exception) {
+        Result.failure(e)
     }
 
-    suspend fun renameSession(sessionId: String, title: String): Result<Unit> {
-        return try {
-            val response = client.post(ApiEndpoint.SessionRename.path) {
-                contentType(ContentType.Application.Json)
-                setBody(RenameRequest(sessionId, title))
-            }
-            if (response.status.isSuccess()) {
-                db.sessionDao().getSession(sessionId)?.let { session ->
-                    db.sessionDao().insertSession(session.copy(title = title))
-                }
-                Result.success(Unit)
-            } else {
-                Result.failure(Exception("Failed to rename: ${response.status}"))
-            }
-        } catch (e: Exception) {
-            Result.failure(e)
+    suspend fun renameSession(sessionId: String, title: String): Result<Unit> = try {
+        val response = client.post(ApiEndpoint.SessionRename.path) {
+            contentType(ContentType.Application.Json)
+            setBody(RenameRequest(sessionId, title))
         }
-    }
-
-    suspend fun deleteSession(sessionId: String): Result<Unit> {
-        return try {
-            val response = client.post(ApiEndpoint.SessionDelete.path) {
-                contentType(ContentType.Application.Json)
-                setBody(DeleteRequest(sessionId))
-            }
-            if (response.status.isSuccess()) {
-                db.sessionDao().deleteSession(sessionId)
-                db.messageDao().deleteMessagesForSession(sessionId)
-                Result.success(Unit)
-            } else {
-                Result.failure(Exception("Failed to delete: ${response.status}"))
-            }
-        } catch (e: Exception) {
-            Result.failure(e)
+        if (response.status.isSuccess()) {
+            db.sessionDao().getSession(sessionId)?.let { db.sessionDao().insertSession(it.copy(title = title)) }
+            Result.success(Unit)
+        } else {
+            Result.failure(Exception("Failed to rename: ${response.status}"))
         }
+    } catch (e: Exception) {
+        Result.failure(e)
     }
 
-    suspend fun setPinned(sessionId: String, pinned: Boolean): Result<Unit> {
-        return try {
-            val response = client.post(ApiEndpoint.SessionPin.path) {
-                contentType(ContentType.Application.Json)
-                setBody(PinRequest(sessionId, pinned))
-            }
-            if (response.status.isSuccess()) {
-                db.sessionDao().setPinned(sessionId, pinned)
-                Result.success(Unit)
-            } else {
-                Result.failure(Exception("Failed to pin: ${response.status}"))
-            }
-        } catch (e: Exception) {
-            Result.failure(e)
+    suspend fun deleteSession(sessionId: String): Result<Unit> = try {
+        val response = client.post(ApiEndpoint.SessionDelete.path) {
+            contentType(ContentType.Application.Json)
+            setBody(DeleteRequest(sessionId))
         }
-    }
-
-    suspend fun setArchived(sessionId: String, archived: Boolean): Result<Unit> {
-        return try {
-            val response = client.post(ApiEndpoint.SessionArchive.path) {
-                contentType(ContentType.Application.Json)
-                setBody(ArchiveRequest(sessionId, archived))
-            }
-            if (response.status.isSuccess()) {
-                db.sessionDao().setArchived(sessionId, archived)
-                Result.success(Unit)
-            } else {
-                Result.failure(Exception("Failed to archive: ${response.status}"))
-            }
-        } catch (e: Exception) {
-            Result.failure(e)
+        if (response.status.isSuccess()) {
+            db.sessionDao().deleteSession(sessionId)
+            db.messageDao().deleteMessagesForSession(sessionId)
+            Result.success(Unit)
+        } else {
+            Result.failure(Exception("Failed to delete: ${response.status}"))
         }
+    } catch (e: Exception) {
+        Result.failure(e)
     }
 
-    suspend fun moveSession(sessionId: String, projectId: String?): Result<Unit> {
-        return try {
-            val response = client.post(ApiEndpoint.SessionMove.path) {
-                contentType(ContentType.Application.Json)
-                setBody(MoveRequest(sessionId, projectId))
-            }
-            if (response.status.isSuccess()) {
-                db.sessionDao().moveSession(sessionId, projectId)
-                Result.success(Unit)
-            } else {
-                Result.failure(Exception("Failed to move: ${response.status}"))
-            }
-        } catch (e: Exception) {
-            Result.failure(e)
+    suspend fun setPinned(sessionId: String, pinned: Boolean): Result<Unit> = try {
+        val response = client.post(ApiEndpoint.SessionPin.path) {
+            contentType(ContentType.Application.Json)
+            setBody(PinRequest(sessionId, pinned))
         }
+        if (response.status.isSuccess()) {
+            db.sessionDao().setPinned(sessionId, pinned)
+            Result.success(Unit)
+        } else {
+            Result.failure(Exception("Failed to pin: ${response.status}"))
+        }
+    } catch (e: Exception) {
+        Result.failure(e)
     }
 
-    // DTOs for API responses
+    suspend fun setArchived(sessionId: String, archived: Boolean): Result<Unit> = try {
+        val response = client.post(ApiEndpoint.SessionArchive.path) {
+            contentType(ContentType.Application.Json)
+            setBody(ArchiveRequest(sessionId, archived))
+        }
+        if (response.status.isSuccess()) {
+            db.sessionDao().setArchived(sessionId, archived)
+            Result.success(Unit)
+        } else {
+            Result.failure(Exception("Failed to archive: ${response.status}"))
+        }
+    } catch (e: Exception) {
+        Result.failure(e)
+    }
+
+    suspend fun moveSession(sessionId: String, projectId: String?): Result<Unit> = try {
+        val response = client.post(ApiEndpoint.SessionMove.path) {
+            contentType(ContentType.Application.Json)
+            setBody(MoveRequest(sessionId, projectId))
+        }
+        if (response.status.isSuccess()) {
+            db.sessionDao().moveSession(sessionId, projectId)
+            Result.success(Unit)
+        } else {
+            Result.failure(Exception("Failed to move: ${response.status}"))
+        }
+    } catch (e: Exception) {
+        Result.failure(e)
+    }
+
+    class Factory(private val application: Application, private val serverUrl: String) : ViewModelProvider.Factory {
+        @Suppress("UNCHECKED_CAST")
+        override fun <T : ViewModel> create(modelClass: Class<T>): T = SessionRepository(application, serverUrl) as T
+    }
+
+    // DTOs
     @Serializable
     private data class SessionsResponse(val sessions: List<SessionDto>)
 
