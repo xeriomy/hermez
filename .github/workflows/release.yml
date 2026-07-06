@@ -29,7 +29,7 @@ permissions:
   contents: write   # needed by softprops/action-gh-release to create the release
 
 env:
-  GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dorg.gradle.caching=true -Dorg.gradle.configuration-cache=true"
+  GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dorg.gradle.caching=true"
   JAVA_DISTRIBUTION: temurin
   JAVA_VERSION: "21"
 
