@@ -57,8 +57,14 @@
 -keep @kotlinx.serialization.Serializable class dev.hermes.** { *; }
 
 # --- Security / crypto ------------------------------------------------------
+# androidx.security:security-crypto pulls in Google Tink, which references
+# errorprone annotations that aren't on the runtime classpath. R8 raises
+# "Missing class" errors without these suppressions.
 -keep class androidx.security.crypto.** { *; }
 -dontwarn androidx.security.crypto.**
+-keep class com.google.crypto.tink.** { *; }
+-dontwarn com.google.crypto.tink.**
+-dontwarn com.google.errorprone.annotations.**
 
 # --- R8 optimizations -------------------------------------------------------
 # Re-package classes to shrink method count and hinder reverse engineering.

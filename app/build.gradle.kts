@@ -21,10 +21,13 @@ android {
 
     signingConfigs {
         create("release") {
-            val keystoreFile = providers.environmentVariable("HERMES_KEYSTORE_FILE").orNull
-            val keystorePassword = providers.environmentVariable("HERMES_KEYSTORE_PASSWORD").orNull
-            val keyAlias = providers.environmentVariable("HERMES_KEY_ALIAS").orNull
-            val keyPassword = providers.environmentVariable("HERMES_KEY_PASSWORD").orNull
+            // Treat both unset AND empty-string env vars as "not provided" —
+            // GitHub Actions substitutes "" when a secret is missing, which
+            // would otherwise crash `file(keystoreFile)` below.
+            val keystoreFile = providers.environmentVariable("HERMES_KEYSTORE_FILE").orNull?.takeIf { it.isNotBlank() }
+            val keystorePassword = providers.environmentVariable("HERMES_KEYSTORE_PASSWORD").orNull?.takeIf { it.isNotBlank() }
+            val keyAlias = providers.environmentVariable("HERMES_KEY_ALIAS").orNull?.takeIf { it.isNotBlank() }
+            val keyPassword = providers.environmentVariable("HERMES_KEY_PASSWORD").orNull?.takeIf { it.isNotBlank() }
             if (keystoreFile != null && keystorePassword != null && keyAlias != null && keyPassword != null) {
                 this.storeFile = file(keystoreFile)
                 this.storePassword = keystorePassword
