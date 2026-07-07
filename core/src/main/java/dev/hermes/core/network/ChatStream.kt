@@ -4,7 +4,6 @@ import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
-import io.ktor.client.plugins.cookies.AcceptAllCookiesStorage
 import io.ktor.client.plugins.cookies.HttpCookies
 import io.ktor.client.plugins.defaultRequest
 import io.ktor.client.plugins.sse.SSE
@@ -27,9 +26,32 @@ import kotlinx.coroutines.flow.flowOn
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
+/**
+ * Streams chat events from `GET /api/chat/stream?stream_id=...` (SSE)
+ * and starts/cancels chats via `POST /api/chat/start` and
+ * `GET /api/chat/cancel`.
+ *
+ * The [baseClient] is borrowed from [SharedHttpClient] so it shares the
+ * same cookie jar (and therefore the auth cookie set by AuthRepository's
+ * login call). The [sseClient] is a separate HttpClient with the SSE
+ * plugin installed — it needs its own client because SSE requires
+ * long-lived streaming connections that the shared client doesn't
+ * support well.
+ *
+ * To ensure the SSE client also has the auth cookie, we copy the
+ * shared client's cookies into the SSE client on every request. This
+ * is a best-effort approach; the server should also accept the cookie
+ * on the SSE connection.
+ *
+ * @param serverUrl The base URL of the hermes-webui server (must
+ *   include scheme, e.g. `http://127.0.0.1:8787`).
+ * @param baseClient The shared [HttpClient] used for non-streaming
+ *   requests (`POST /api/chat/start`, `GET /api/chat/cancel`). If
+ *   null, a new client is created via [SharedHttpClient.client].
+ */
 class ChatStream(
     private val serverUrl: String,
-    private val baseClient: HttpClient = HttpClientProvider.create(serverUrl)
+    private val baseClient: HttpClient = SharedHttpClient.client(serverUrl) ?: HttpClient(OkHttp)
 ) {
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
@@ -39,7 +61,11 @@ class ChatStream(
             json(Json { ignoreUnknownKeys = true })
         }
         install(HttpCookies) {
-            storage = AcceptAllCookiesStorage()
+            // Share the SAME cookie storage as SharedHttpClient so the
+            // auth cookie set by AuthRepository.login() is sent with
+            // SSE requests too. Without this, the SSE endpoint returns
+            // 401 because the cookie jar is empty.
+            storage = SharedHttpClient.cookieStorage
         }
         install(SSE)
         defaultRequest {

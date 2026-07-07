@@ -7,7 +7,7 @@ import dev.hermes.core.data.local.AppDatabase
 import dev.hermes.core.data.local.MessageEntity
 import dev.hermes.core.data.local.SessionEntity
 import dev.hermes.core.network.ApiEndpoint
-import dev.hermes.core.network.HttpClientProvider
+import dev.hermes.core.network.SharedHttpClient
 import dev.hermes.core.network.friendlyError
 import io.ktor.client.*
 import io.ktor.client.call.body
@@ -25,29 +25,14 @@ class SessionRepository(app: Application) : AndroidViewModel(app) {
     private val prefsRepository = AuthPrefsRepository(context)
 
     /**
-     * Read the saved server URL fresh on every API call. The URL is empty
-     * until the user logs in via AuthRepository, and can change if they
-     * log out and reconnect to a different server. We rebuild the HttpClient
-     * whenever the URL changes so the cookie jar resets.
+     * Borrow the process-wide shared [HttpClient] from [SharedHttpClient].
+     * Returns null if the user isn't logged in yet (no saved URL).
      *
-     * Returns null if no URL is saved — callers should bail out with a
-     * friendly "not connected" error in that case.
+     * Because this is the SAME client that [dev.hermes.core.auth.AuthRepository]
+     * used for login, the auth cookie is already in the cookie jar — no
+     * need to re-authenticate.
      */
-    @Volatile
-    private var cachedUrl: String? = null
-    @Volatile
-    private var cachedClient: HttpClient? = null
-
-    private fun client(): HttpClient? {
-        val url = prefsRepository.getServerUrl()
-        if (url.isNullOrEmpty()) return null
-        if (url == cachedUrl && cachedClient != null) return cachedClient!!
-        cachedClient?.close()
-        val newClient = HttpClientProvider.create(url)
-        cachedClient = newClient
-        cachedUrl = url
-        return newClient
-    }
+    private fun client(): HttpClient? = SharedHttpClient.client(prefsRepository.getServerUrl())
 
     fun getActiveSessions(): Flow<List<SessionEntity>> = db.sessionDao().getActiveSessions()
     fun getArchivedSessions(): Flow<List<SessionEntity>> = db.sessionDao().getArchivedSessions()

@@ -5,7 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import dev.hermes.core.network.ApiEndpoint
-import dev.hermes.core.network.HttpClientProvider
+import dev.hermes.core.network.SharedHttpClient
 import dev.hermes.core.network.friendlyError
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
@@ -61,11 +61,12 @@ sealed interface LoginResult {
  *
  * Tests connection via `GET /health` + `GET /api/auth/status`, then logs
  * in via `POST /api/auth/login` with the password. The auth cookie is
- * held by the Ktor [HttpClient]'s [HttpCookies] plugin — we don't persist
- * it ourselves.
+ * held by [SharedHttpClient]'s single process-wide [HttpClient] — so
+ * every other repository (SessionRepository, ChatStream) shares the
+ * same cookie jar automatically.
  *
- * Extends [ViewModel] so it survives configuration changes and can be
- * obtained via `viewModel()` in Compose.
+ * Extends [AndroidViewModel] so it can be created by the default Compose
+ * `viewModel()` factory with just an [Application] parameter.
  */
 class AuthRepository(app: Application) : AndroidViewModel(app) {
 
@@ -75,31 +76,15 @@ class AuthRepository(app: Application) : AndroidViewModel(app) {
 
     private val prefsRepository = AuthPrefsRepository(context)
 
-    /**
-     * Lazily-created HTTP client for the currently-configured server URL.
-     * Recreated when a new URL is used. Held as a private var so callers
-     * (ChatStream, SessionRepository) can share one client and one cookie jar.
-     */
-    @Volatile
-    private var httpClient: HttpClient? = null
-
-    /**
-     * The server URL the [httpClient] is currently configured for, or null
-     * if no client has been created yet.
-     */
-    @Volatile
-    private var currentServerUrl: String? = null
-
     init {
         // On cold start, if we have a saved server URL, jump straight to
-        // LoggedIn — the user is already authenticated at the cookie level
-        // (or will be prompted to re-enter password on first API call).
-        // We don't restore the cookie itself, so the next request may 401
-        // and the UI can route back to login.
+        // LoggedIn. We DON'T restore the auth cookie (cookies don't
+        // survive app process death in Ktor's in-memory storage), so the
+        // next API call will 401 and the UI can prompt for re-login.
+        // The SessionRepository handles that 401 gracefully.
         val savedUrl = prefsRepository.getServerUrl()
         if (savedUrl != null) {
             _authState.value = AuthState.LoggedIn(savedUrl)
-            currentServerUrl = savedUrl
         }
     }
 
@@ -109,9 +94,14 @@ class AuthRepository(app: Application) : AndroidViewModel(app) {
      *
      * Calls `GET /health` (must return 2xx) then `GET /api/auth/status`
      * (returns `{auth_enabled, password_auth_enabled}`).
+     *
+     * Uses [SharedHttpClient] so the probe shares the same cookie jar
+     * as subsequent login + API calls.
      */
     suspend fun testConnection(serverUrl: String): ConnectionProbeResult {
-        val client = clientFor(serverUrl)
+        val normalized = SharedHttpClient.normalizeUrl(serverUrl)
+        val client = SharedHttpClient.client(normalized)
+            ?: return ConnectionProbeResult.Failed("No server URL provided")
         return try {
             val health: HttpResponse = client.get(ApiEndpoint.Health.path)
             if (!health.status.isSuccess()) {
@@ -138,14 +128,15 @@ class AuthRepository(app: Application) : AndroidViewModel(app) {
     /**
      * Log in to the server at [serverUrl] with [password]. On success,
      * persists the server URL, transitions to [AuthState.LoggedIn], and
-     * makes the new HTTP client (with fresh auth cookie) available to
-     * other repositories.
+     * leaves the auth cookie in [SharedHttpClient]'s cookie jar so
+     * every other repository inherits it.
      *
-     * If the server reports `auth_enabled = false`, [password] is ignored
-     * and login succeeds without calling `/api/auth/login`.
+     * If the server reports `auth_enabled = false`, [password] is
+     * ignored and login succeeds without calling `/api/auth/login`.
      */
     suspend fun login(serverUrl: String, password: String): LoginResult {
-        val probe = testConnection(serverUrl)
+        val normalized = SharedHttpClient.normalizeUrl(serverUrl)
+        val probe = testConnection(normalized)
         when (probe) {
             is ConnectionProbeResult.Failed -> return LoginResult.Failed(probe.message)
             is ConnectionProbeResult.Ok -> {
@@ -155,7 +146,11 @@ class AuthRepository(app: Application) : AndroidViewModel(app) {
                 }
 
                 if (needsPassword) {
-                    val client = clientFor(serverUrl)
+                    // SharedHttpClient.client(normalized) returns the same
+                    // client that testConnection just used — so any cookies
+                    // the server set during the probe are already in the jar.
+                    val client = SharedHttpClient.client(normalized)
+                        ?: return LoginResult.Failed("No server URL provided")
                     try {
                         val response: HttpResponse = client.post(ApiEndpoint.AuthLogin.path) {
                             contentType(ContentType.Application.Json)
@@ -175,18 +170,19 @@ class AuthRepository(app: Application) : AndroidViewModel(app) {
                         return LoginResult.Failed(friendlyError(e))
                     }
                 }
-                // Either no auth required, or login succeeded — persist & transition.
-                val normalizedUrl = normalizeUrl(serverUrl)
-                prefsRepository.saveServerUrl(normalizedUrl)
-                _authState.value = AuthState.LoggedIn(normalizedUrl)
+                // Either no auth required, or login succeeded — persist &
+                // transition. The auth cookie is now in SharedHttpClient's
+                // cookie jar, shared with every other repository.
+                prefsRepository.saveServerUrl(normalized)
+                _authState.value = AuthState.LoggedIn(normalized)
                 return LoginResult.Success
             }
         }
     }
 
     /**
-     * Log out: clear persisted URL, drop the HTTP client so cookies are
-     * gone, and transition to LoggedOut.
+     * Log out: clear persisted URL, drop the shared HTTP client so
+     * cookies are gone, and transition to LoggedOut.
      *
      * We don't call `POST /api/auth/logout` — the cookie lives in our
      * HttpClient's [HttpCookies] storage, not in the server's session
@@ -195,32 +191,8 @@ class AuthRepository(app: Application) : AndroidViewModel(app) {
      */
     fun logout() {
         prefsRepository.clearServerUrl()
-        httpClient?.close()
-        httpClient = null
-        currentServerUrl = null
+        SharedHttpClient.reset()
         _authState.value = AuthState.LoggedOut
-    }
-
-    /**
-     * Get or create an HTTP client pointed at [serverUrl]. If the URL
-     * changed since the last call, the old client is closed and a new
-     * one is created (so the cookie jar resets).
-     *
-     * Auto-prepends `http://` if the user entered a bare host like
-     * `127.0.0.1:8787` without a scheme — Ktor's URL parser would
-     * throw "Fail to parse url" otherwise.
-     */
-    private fun clientFor(serverUrl: String): HttpClient {
-        val normalized = normalizeUrl(serverUrl).trimEnd('/')
-        val current = httpClient
-        if (current != null && currentServerUrl == normalized) {
-            return current
-        }
-        current?.close()
-        val newClient = HttpClientProvider.create(normalized)
-        httpClient = newClient
-        currentServerUrl = normalized
-        return newClient
     }
 
     @Serializable
@@ -231,21 +203,6 @@ class AuthRepository(app: Application) : AndroidViewModel(app) {
 
     @Serializable
     private data class LoginRequest(val password: String)
-
-    /**
-     * Ensure the URL has an http:// or https:// scheme. If the user
-     * typed a bare `host:port` (e.g. `127.0.0.1:8787`), prepend
-     * `http://`. Ktor's URL parser throws "Fail to parse url" without
-     * a scheme.
-     */
-    private fun normalizeUrl(url: String): String {
-        val trimmed = url.trim()
-        return when {
-            trimmed.startsWith("http://") || trimmed.startsWith("https://") -> trimmed
-            trimmed.startsWith("//") -> "http:$trimmed"
-            else -> "http://$trimmed"
-        }
-    }
 }
 
 /**
