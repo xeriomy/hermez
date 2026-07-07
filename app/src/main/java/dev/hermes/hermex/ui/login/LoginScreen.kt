@@ -34,7 +34,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -47,7 +46,6 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.hermes.core.auth.AuthRepository
 import dev.hermes.core.auth.ConnectionProbeResult
@@ -71,14 +69,12 @@ fun LoginScreen(
     authRepository: AuthRepository = viewModel(),
     onLoggedIn: () -> Unit = {}
 ) {
-    val authState by authRepository.authState.collectAsStateWithLifecycle()
-
-    // Route to session list as soon as auth flips to LoggedIn.
-    LaunchedEffect(authState) {
-        if (authState is dev.hermes.core.auth.AuthState.LoggedIn) {
-            onLoggedIn()
-        }
-    }
+    // NOTE: We do NOT observe authState here. The host HermexApp already
+    // observes authState and navigates to sessions when it flips to
+    // LoggedIn. Having two LaunchedEffects racing on the same state
+    // caused navigation glitches. The onLoggedIn callback is kept for
+    // backwards compatibility but is intentionally not invoked —
+    // HermexApp's LaunchedEffect handles the transition.
 
     var serverUrl by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
@@ -214,8 +210,8 @@ fun LoginScreen(
                             scope.launch {
                                 when (val result = authRepository.login(serverUrl.trim(), password)) {
                                     LoginResult.Success -> {
-                                        // authState flips to LoggedIn → LaunchedEffect above
-                                        // routes to session list. Nothing to do here.
+                                    // authState flips to LoggedIn → HermexApp's
+                                    // LaunchedEffect navigates to sessions.
                                     }
                                     is LoginResult.Failed -> {
                                         errorMessage = result.message

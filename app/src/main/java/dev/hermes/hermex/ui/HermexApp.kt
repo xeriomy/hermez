@@ -51,15 +51,12 @@ fun HermexApp() {
     LaunchedEffect(authState) {
         when (authState) {
             AuthState.LoggedOut -> {
-                // Pop the ENTIRE back stack (including the current session
-                // list) and show login as the new root. Without
-                // popUpTo(graph.findStartDestination().id) { inclusive = true },
-                // the session list stays on the stack and the user can
-                // navigate back to it after logging out.
+                // Pop the ENTIRE back stack and show login as the new root.
+                // popUpTo(0) { inclusive = true } clears every destination
+                // including the start destination, then navigate(LOGIN)
+                // creates login as the sole entry on the back stack.
                 navController.navigate(Routes.LOGIN) {
-                    popUpTo(navController.graph.startDestinationId) {
-                        inclusive = true
-                    }
+                    popUpTo(0) { inclusive = true }
                     launchSingleTop = true
                 }
             }

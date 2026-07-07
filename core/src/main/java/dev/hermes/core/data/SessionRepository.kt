@@ -184,19 +184,19 @@ class SessionRepository(app: Application) : AndroidViewModel(app) {
     @Serializable
     private data class SessionDto(
         val session_id: String,
-        val title: String?,
+        val title: String? = null,
         // hermes-webui sends timestamps as float Unix epoch (e.g. 1783449907.2857065)
         val created_at: Double? = null,
         val updated_at: Double? = null,
-        val pinned: Boolean,
-        val archived: Boolean,
-        val project_id: String?,
-        val workspace: String?,
-        val model: String?,
-        val model_provider: String?,
-        val profile: String?,
+        val pinned: Boolean = false,
+        val archived: Boolean = false,
+        val project_id: String? = null,
+        val workspace: String? = null,
+        val model: String? = null,
+        val model_provider: String? = null,
+        val profile: String? = null,
         val message_count: Int = 0,
-        val last_message_preview: String?
+        val last_message_preview: String? = null
     ) {
         fun toEntity(): SessionEntity = SessionEntity(
             sessionId = session_id,
@@ -221,20 +221,20 @@ class SessionRepository(app: Application) : AndroidViewModel(app) {
     @Serializable
     private data class SessionDetailDto(
         val session_id: String,
-        val title: String?,
+        val title: String? = null,
         // hermes-webui sends timestamps as float Unix epoch
         val created_at: Double? = null,
         val updated_at: Double? = null,
-        val pinned: Boolean,
-        val archived: Boolean,
-        val project_id: String?,
-        val workspace: String?,
-        val model: String?,
-        val model_provider: String?,
-        val profile: String?,
+        val pinned: Boolean = false,
+        val archived: Boolean = false,
+        val project_id: String? = null,
+        val workspace: String? = null,
+        val model: String? = null,
+        val model_provider: String? = null,
+        val profile: String? = null,
         val message_count: Int = 0,
-        val last_message_preview: String?,
-        val messages: List<MessageDto>?
+        val last_message_preview: String? = null,
+        val messages: List<MessageDto>? = null
     ) {
         fun toEntity(): SessionEntity = SessionEntity(
             sessionId = session_id,
@@ -260,12 +260,12 @@ class SessionRepository(app: Application) : AndroidViewModel(app) {
         val content: String,
         // hermes-webui sends timestamps as float Unix epoch
         val timestamp: Double? = null,
-        val model: String?,
-        val provider: String?,
-        val tool_calls: String?,
-        val reasoning: String?,
-        val attachments: String?,
-        val metadata: String?
+        val model: String? = null,
+        val provider: String? = null,
+        val tool_calls: String? = null,
+        val reasoning: String? = null,
+        val attachments: String? = null,
+        val metadata: String? = null
     ) {
         fun toEntity(sessionId: String): MessageEntity = MessageEntity(
             sessionId = sessionId,

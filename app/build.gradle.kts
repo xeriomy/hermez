@@ -13,7 +13,12 @@ android {
         applicationId = "dev.hermes.hermex"
         minSdk = 24
         targetSdk = 35
-        versionCode = 1
+        // versionCode: use the CI run number if available (GITHUB_RUN_NUMBER),
+        // otherwise fall back to 1 for local builds. This ensures every CI
+        // build has a higher versionCode than the previous one, so Android
+        // treats it as an update instead of refusing with "package conflicts
+        // with an existing package".
+        versionCode = (providers.environmentVariable("GITHUB_RUN_NUMBER").orNull?.toIntOrNull() ?: 1)
         versionName = "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
