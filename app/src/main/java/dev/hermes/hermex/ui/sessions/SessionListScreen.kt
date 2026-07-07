@@ -41,7 +41,6 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.hermes.core.auth.AuthRepository
-import dev.hermes.core.auth.AuthState
 import dev.hermes.core.data.SessionRepository
 import dev.hermes.core.data.local.SessionEntity
 import kotlinx.coroutines.launch
@@ -53,14 +52,12 @@ fun SessionListScreen(
     authRepository: AuthRepository = viewModel(),
     sessionRepository: SessionRepository = viewModel()
 ) {
-    val authState by authRepository.authState.collectAsStateWithLifecycle()
     val activeSessions by sessionRepository.getActiveSessions()
         .collectAsStateWithLifecycle(initialValue = emptyList())
     var isRefreshing by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var hasAutoRefreshed by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
-
-    val serverUrl = (authState as? AuthState.LoggedIn)?.serverUrl ?: ""
 
     fun doRefresh() {
         if (!isRefreshing) {
@@ -76,8 +73,12 @@ fun SessionListScreen(
         }
     }
 
-    LaunchedEffect(serverUrl) {
-        if (serverUrl.isNotEmpty() && activeSessions.isEmpty() && !isRefreshing) {
+    // Auto-refresh ONCE when the screen first appears. Previously this
+    // re-fired on every serverUrl change (which happened on every authState
+    // emission), causing repeated network calls and UI lag.
+    LaunchedEffect(Unit) {
+        if (!hasAutoRefreshed) {
+            hasAutoRefreshed = true
             doRefresh()
         }
     }

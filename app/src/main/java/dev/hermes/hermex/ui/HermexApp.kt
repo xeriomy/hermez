@@ -20,14 +20,17 @@ import dev.hermes.hermex.ui.navigation.Routes
  * The root composable. Hosts the [HermesNavHost] and observes
  * [AuthRepository.authState] to drive login↔session-list routing.
  *
- * When `authState` flips to `LoggedOut`, the nav graph pops back to
- * the login screen. When it flips to `LoggedIn`, the graph navigates
- * to the session list (the login screen itself also routes on success
- * — this is the backstop for the cold-start-with-saved-URL case).
+ * The NavHost's `startDestination` is chosen ONCE at first composition
+ * based on the initial auth state — so we don't flash the login screen
+ * on cold start when the user is already logged in. After that, all
+ * navigation is driven by the [LaunchedEffect] below, which fires
+ * whenever `authState` changes.
  *
- * The NavHost's `startDestination` is chosen once at composition based
- * on the initial auth state, so we don't flash the login screen on
- * cold start when the user is already logged in.
+ * Why `remember { }` (no key) for startDestination: if we keyed it on
+ * `authState`, the entire NavHost would be recreated on every auth
+ * change (including logout), discarding the back stack and causing the
+ * "logout hangs" bug. Instead, we compute it once and let the
+ * LaunchedEffect handle navigation imperatively.
  */
 @Composable
 fun HermexApp() {
@@ -35,31 +38,35 @@ fun HermexApp() {
     val authState by authRepository.authState.collectAsStateWithLifecycle()
     val navController = rememberNavController()
 
-    // Pick the start destination based on whether we have a saved server URL.
-    // We only do this once at first composition — after that, navigation
-    // is driven by the LaunchedEffect below.
-    val startDestination = remember(authState) {
-        when (authState) {
+    // Compute start destination ONCE. Subsequent auth changes are handled
+    // by the LaunchedEffect below — we do NOT want to recreate the NavHost.
+    val startDestination = remember {
+        when (authRepository.authState.value) {
             is AuthState.LoggedIn -> Routes.SESSIONS
             AuthState.LoggedOut -> Routes.LOGIN
         }
     }
 
-    // Drive navigation when auth state changes after composition.
+    // Drive navigation when auth state changes.
     LaunchedEffect(authState) {
         when (authState) {
             AuthState.LoggedOut -> {
-                // Pop everything and show login. Use launchSingleTop so we
-                // don't stack multiple login instances.
+                // Pop the ENTIRE back stack (including the current session
+                // list) and show login as the new root. Without
+                // popUpTo(graph.findStartDestination().id) { inclusive = true },
+                // the session list stays on the stack and the user can
+                // navigate back to it after logging out.
                 navController.navigate(Routes.LOGIN) {
-                    popUpTo(0) { inclusive = true }
+                    popUpTo(navController.graph.startDestinationId) {
+                        inclusive = true
+                    }
                     launchSingleTop = true
                 }
             }
             is AuthState.LoggedIn -> {
-                // If we're currently on login (i.e. user just logged in),
-                // route to sessions. The login screen itself also does this
-                // via onLoggedIn — this is the backstop for cold-start
+                // Only navigate if we're currently on the login screen.
+                // The login screen's onLoggedIn callback also navigates
+                // to sessions — this is the backstop for cold-start
                 // restoration where authState was already LoggedIn.
                 val current = navController.currentDestination?.route
                 if (current == Routes.LOGIN) {
