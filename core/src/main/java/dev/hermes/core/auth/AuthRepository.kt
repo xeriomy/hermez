@@ -175,8 +175,9 @@ class AuthRepository(app: Application) : AndroidViewModel(app) {
                     }
                 }
                 // Either no auth required, or login succeeded — persist & transition.
-                prefsRepository.saveServerUrl(serverUrl)
-                _authState.value = AuthState.LoggedIn(serverUrl)
+                val normalizedUrl = normalizeUrl(serverUrl)
+                prefsRepository.saveServerUrl(normalizedUrl)
+                _authState.value = AuthState.LoggedIn(normalizedUrl)
                 return LoginResult.Success
             }
         }
@@ -203,9 +204,13 @@ class AuthRepository(app: Application) : AndroidViewModel(app) {
      * Get or create an HTTP client pointed at [serverUrl]. If the URL
      * changed since the last call, the old client is closed and a new
      * one is created (so the cookie jar resets).
+     *
+     * Auto-prepends `http://` if the user entered a bare host like
+     * `127.0.0.1:8787` without a scheme — Ktor's URL parser would
+     * throw "Fail to parse url" otherwise.
      */
     private fun clientFor(serverUrl: String): HttpClient {
-        val normalized = serverUrl.trimEnd('/')
+        val normalized = normalizeUrl(serverUrl).trimEnd('/')
         val current = httpClient
         if (current != null && currentServerUrl == normalized) {
             return current
@@ -225,6 +230,21 @@ class AuthRepository(app: Application) : AndroidViewModel(app) {
 
     @Serializable
     private data class LoginRequest(val password: String)
+
+    /**
+     * Ensure the URL has an http:// or https:// scheme. If the user
+     * typed a bare `host:port` (e.g. `127.0.0.1:8787`), prepend
+     * `http://`. Ktor's URL parser throws "Fail to parse url" without
+     * a scheme.
+     */
+    private fun normalizeUrl(url: String): String {
+        val trimmed = url.trim()
+        return when {
+            trimmed.startsWith("http://") || trimmed.startsWith("https://") -> trimmed
+            trimmed.startsWith("//") -> "http:$trimmed"
+            else -> "http://$trimmed"
+        }
+    }
 }
 
 /**

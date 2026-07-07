@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Network security config for Hermez.
+
+    Android 9+ (API 28+) blocks all cleartext HTTP traffic by default.
+    Hermez is a self-hosted client — users connect to their own server,
+    which may be:
+      - on localhost (Termux on the same phone)
+      - on a Tailscale IP (100.64.0.0/10 CGNAT range — plain HTTP)
+      - on a LAN IP (192.168.x.x, 10.x.x.x)
+      - behind a real HTTPS tunnel (Cloudflare, etc.)
+
+    Android's NSC <domain> tag matches DNS hostnames, not IP prefixes,
+    so we can't allow cleartext for just Tailscale's /10 range. Since
+    the user explicitly enters their own server URL, we allow cleartext
+    globally — the same approach used by Syncthing, Home Assistant, and
+    other self-hosted client apps.
+
+    This mirrors the iOS app, which allows plain HTTP for Tailscale's
+    100.64.0.0/10 range and localhost.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>
