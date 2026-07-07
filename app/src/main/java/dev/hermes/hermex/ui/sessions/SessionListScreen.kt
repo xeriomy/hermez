@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Logout
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
@@ -88,6 +89,9 @@ fun SessionListScreen(
                     } else {
                         Icon(Icons.Default.Refresh, contentDescription = "Refresh")
                     }
+                }
+                IconButton(onClick = { authRepository.logout() }) {
+                    Icon(Icons.Default.Logout, contentDescription = "Log out")
                 }
             },
             colors = TopAppBarDefaults.topAppBarColors(
