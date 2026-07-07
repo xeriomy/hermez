@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Logout
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Refresh
@@ -56,15 +57,28 @@ fun SessionListScreen(
     val activeSessions by sessionRepository.getActiveSessions()
         .collectAsStateWithLifecycle(initialValue = emptyList())
     var isRefreshing by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
 
     val serverUrl = (authState as? AuthState.LoggedIn)?.serverUrl ?: ""
 
+    fun doRefresh() {
+        if (!isRefreshing) {
+            isRefreshing = true
+            errorMessage = null
+            scope.launch {
+                val result = sessionRepository.refreshSessions()
+                result.onFailure { e ->
+                    errorMessage = e.message ?: "Failed to load sessions"
+                }
+                isRefreshing = false
+            }
+        }
+    }
+
     LaunchedEffect(serverUrl) {
         if (serverUrl.isNotEmpty() && activeSessions.isEmpty() && !isRefreshing) {
-            isRefreshing = true
-            sessionRepository.refreshSessions()
-            isRefreshing = false
+            doRefresh()
         }
     }
 
@@ -73,15 +87,7 @@ fun SessionListScreen(
             title = { Text("Sessions") },
             actions = {
                 IconButton(
-                    onClick = {
-                        if (!isRefreshing) {
-                            isRefreshing = true
-                            scope.launch {
-                                sessionRepository.refreshSessions()
-                                isRefreshing = false
-                            }
-                        }
-                    },
+                    onClick = { doRefresh() },
                     enabled = !isRefreshing
                 ) {
                     if (isRefreshing) {
@@ -99,7 +105,33 @@ fun SessionListScreen(
             )
         )
 
-        if (activeSessions.isEmpty()) {
+        // Error banner (shown when a refresh fails)
+        errorMessage?.let { msg ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    Icons.Default.Error,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.error
+                )
+                Text(
+                    text = msg,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.weight(1f)
+                )
+                androidx.compose.material3.TextButton(onClick = { doRefresh() }) {
+                    Text("Retry")
+                }
+            }
+        }
+
+        if (activeSessions.isEmpty() && !isRefreshing) {
             Box(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
@@ -110,13 +142,26 @@ fun SessionListScreen(
                 ) {
                     Text("No sessions yet", fontSize = 18.sp, fontWeight = FontWeight.Medium)
                     Text(
-                        "Create a new session from the chat screen",
+                        if (errorMessage != null) "Couldn't load sessions from the server."
+                        else "Tap + to start your first conversation.",
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Button(onClick = { onSessionClick("new") }) {
                         Text("New Session")
                     }
+                    if (errorMessage == null) {
+                        androidx.compose.material3.TextButton(onClick = { doRefresh() }) {
+                            Text("Refresh again")
+                        }
+                    }
                 }
+            }
+        } else if (activeSessions.isEmpty() && isRefreshing) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator()
             }
         } else {
             LazyColumn(

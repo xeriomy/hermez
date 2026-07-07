@@ -6,6 +6,7 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import dev.hermes.core.network.ApiEndpoint
 import dev.hermes.core.network.HttpClientProvider
+import dev.hermes.core.network.friendlyError
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.request.get
@@ -130,7 +131,7 @@ class AuthRepository(app: Application) : AndroidViewModel(app) {
                 passwordAuthEnabled = body.password_auth_enabled ?: true
             )
         } catch (e: Exception) {
-            ConnectionProbeResult.Failed(e.message ?: "Connection failed")
+            ConnectionProbeResult.Failed(friendlyError(e))
         }
     }
 
@@ -171,7 +172,7 @@ class AuthRepository(app: Application) : AndroidViewModel(app) {
                             )
                         }
                     } catch (e: Exception) {
-                        return LoginResult.Failed(e.message ?: "Login request failed")
+                        return LoginResult.Failed(friendlyError(e))
                     }
                 }
                 // Either no auth required, or login succeeded — persist & transition.

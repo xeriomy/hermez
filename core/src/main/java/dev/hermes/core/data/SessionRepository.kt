@@ -8,6 +8,7 @@ import dev.hermes.core.data.local.MessageEntity
 import dev.hermes.core.data.local.SessionEntity
 import dev.hermes.core.network.ApiEndpoint
 import dev.hermes.core.network.HttpClientProvider
+import dev.hermes.core.network.friendlyError
 import io.ktor.client.*
 import io.ktor.client.call.body
 import io.ktor.client.request.*
@@ -21,11 +22,32 @@ import kotlinx.serialization.json.Json
 class SessionRepository(app: Application) : AndroidViewModel(app) {
     private val context = app.applicationContext
     private val db = AppDatabase.getInstance(context)
-    // Read the saved server URL from encrypted prefs. If empty (user not
-    // logged in yet), API calls will fail gracefully — the session list
-    // just shows local cache.
-    private val serverUrl = AuthPrefsRepository(context).getServerUrl() ?: ""
-    private val client = HttpClientProvider.create(serverUrl)
+    private val prefsRepository = AuthPrefsRepository(context)
+
+    /**
+     * Read the saved server URL fresh on every API call. The URL is empty
+     * until the user logs in via AuthRepository, and can change if they
+     * log out and reconnect to a different server. We rebuild the HttpClient
+     * whenever the URL changes so the cookie jar resets.
+     *
+     * Returns null if no URL is saved — callers should bail out with a
+     * friendly "not connected" error in that case.
+     */
+    @Volatile
+    private var cachedUrl: String? = null
+    @Volatile
+    private var cachedClient: HttpClient? = null
+
+    private fun client(): HttpClient? {
+        val url = prefsRepository.getServerUrl()
+        if (url.isNullOrEmpty()) return null
+        if (url == cachedUrl && cachedClient != null) return cachedClient!!
+        cachedClient?.close()
+        val newClient = HttpClientProvider.create(url)
+        cachedClient = newClient
+        cachedUrl = url
+        return newClient
+    }
 
     fun getActiveSessions(): Flow<List<SessionEntity>> = db.sessionDao().getActiveSessions()
     fun getArchivedSessions(): Flow<List<SessionEntity>> = db.sessionDao().getArchivedSessions()
@@ -34,8 +56,17 @@ class SessionRepository(app: Application) : AndroidViewModel(app) {
     fun getMessages(sessionId: String, limit: Int = 50): Flow<List<MessageEntity>> = db.messageDao().getMessages(sessionId, limit)
 
     suspend fun refreshSessions(): Result<List<SessionEntity>> = runCatching {
+        val client = client() ?: throw Exception("Not connected to a server. Log in first.")
         val response = client.get(ApiEndpoint.Sessions.path)
-        if (!response.status.isSuccess()) throw Exception("Failed to refresh sessions: ${response.status}")
+        if (!response.status.isSuccess()) {
+            throw Exception(when (response.status.value) {
+                401 -> "Session expired. Please log in again."
+                403 -> "Forbidden — your account can't list sessions."
+                404 -> "Server is reachable but /api/sessions was not found."
+                in 500..599 -> "Server error (${response.status}). Check hermes-webui logs."
+                else -> "Failed to load sessions (${response.status})."
+            })
+        }
         val sessions = response.body<SessionsResponse>().sessions
         val entities = sessions.map { it.toEntity() }
         db.sessionDao().insertSessions(entities)
@@ -43,8 +74,16 @@ class SessionRepository(app: Application) : AndroidViewModel(app) {
     }
 
     suspend fun loadSession(sessionId: String, msgLimit: Int = 50): Result<SessionEntity> = runCatching {
+        val client = client() ?: throw Exception("Not connected to a server. Log in first.")
         val response = client.get("${ApiEndpoint.SessionDetail.path}?session_id=$sessionId&messages=1&msg_limit=$msgLimit")
-        if (!response.status.isSuccess()) throw Exception("Failed to load session: ${response.status}")
+        if (!response.status.isSuccess()) {
+            throw Exception(when (response.status.value) {
+                401 -> "Session expired. Please log in again."
+                404 -> "Session not found on the server."
+                in 500..599 -> "Server error (${response.status})."
+                else -> "Failed to load session (${response.status})."
+            })
+        }
         val session = response.body<SessionDetailResponse>().session ?: throw Exception("Session not found")
         val entity = session.toEntity()
         db.sessionDao().insertSession(entity)
@@ -55,6 +94,7 @@ class SessionRepository(app: Application) : AndroidViewModel(app) {
     }
 
     suspend fun createSession(workspace: String?, model: String?, modelProvider: String?, profile: String?): Result<SessionEntity> = try {
+        val client = client() ?: return Result.failure(Exception("Not connected to a server. Log in first."))
         val response = client.post(ApiEndpoint.SessionNew.path) {
             contentType(ContentType.Application.Json)
             setBody(CreateSessionRequest(workspace, model, modelProvider, profile))
@@ -68,10 +108,11 @@ class SessionRepository(app: Application) : AndroidViewModel(app) {
             Result.failure(Exception("Failed to create session: ${response.status}"))
         }
     } catch (e: Exception) {
-        Result.failure(e)
+        Result.failure(Exception(friendlyError(e)))
     }
 
     suspend fun renameSession(sessionId: String, title: String): Result<Unit> = try {
+        val client = client() ?: return Result.failure(Exception("Not connected to a server. Log in first."))
         val response = client.post(ApiEndpoint.SessionRename.path) {
             contentType(ContentType.Application.Json)
             setBody(RenameRequest(sessionId, title))
@@ -87,6 +128,7 @@ class SessionRepository(app: Application) : AndroidViewModel(app) {
     }
 
     suspend fun deleteSession(sessionId: String): Result<Unit> = try {
+        val client = client() ?: return Result.failure(Exception("Not connected to a server. Log in first."))
         val response = client.post(ApiEndpoint.SessionDelete.path) {
             contentType(ContentType.Application.Json)
             setBody(DeleteRequest(sessionId))
@@ -103,6 +145,7 @@ class SessionRepository(app: Application) : AndroidViewModel(app) {
     }
 
     suspend fun setPinned(sessionId: String, pinned: Boolean): Result<Unit> = try {
+        val client = client() ?: return Result.failure(Exception("Not connected to a server. Log in first."))
         val response = client.post(ApiEndpoint.SessionPin.path) {
             contentType(ContentType.Application.Json)
             setBody(PinRequest(sessionId, pinned))
@@ -118,6 +161,7 @@ class SessionRepository(app: Application) : AndroidViewModel(app) {
     }
 
     suspend fun setArchived(sessionId: String, archived: Boolean): Result<Unit> = try {
+        val client = client() ?: return Result.failure(Exception("Not connected to a server. Log in first."))
         val response = client.post(ApiEndpoint.SessionArchive.path) {
             contentType(ContentType.Application.Json)
             setBody(ArchiveRequest(sessionId, archived))
@@ -133,6 +177,7 @@ class SessionRepository(app: Application) : AndroidViewModel(app) {
     }
 
     suspend fun moveSession(sessionId: String, projectId: String?): Result<Unit> = try {
+        val client = client() ?: return Result.failure(Exception("Not connected to a server. Log in first."))
         val response = client.post(ApiEndpoint.SessionMove.path) {
             contentType(ContentType.Application.Json)
             setBody(MoveRequest(sessionId, projectId))
