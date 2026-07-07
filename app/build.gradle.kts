@@ -84,6 +84,10 @@ android {
 dependencies {
     implementation(project(":core"))
 
+    // Ktor — needed because ChatStream's public API references HttpClient
+    // types, and :core uses `implementation` (not `api`) for Ktor.
+    implementation("io.ktor:ktor-client-core:3.0.3")
+
     // Compose / Material
     implementation(platform("androidx.compose:compose-bom:2024.06.00"))
     implementation("androidx.compose.ui:ui")

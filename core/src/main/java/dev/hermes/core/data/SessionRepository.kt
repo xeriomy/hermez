@@ -1,8 +1,8 @@
 package dev.hermes.core.data
 
 import android.app.Application
-import androidx.lifecycle.ViewModel
-import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.AndroidViewModel
+import dev.hermes.core.auth.AuthPrefsRepository
 import dev.hermes.core.data.local.AppDatabase
 import dev.hermes.core.data.local.MessageEntity
 import dev.hermes.core.data.local.SessionEntity
@@ -10,7 +10,6 @@ import dev.hermes.core.network.ApiEndpoint
 import dev.hermes.core.network.HttpClientProvider
 import io.ktor.client.*
 import io.ktor.client.call.body
-import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
@@ -19,9 +18,13 @@ import kotlinx.coroutines.flow.map
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
-class SessionRepository(application: Application, private val serverUrl: String) : ViewModel() {
-    private val context = application.applicationContext
+class SessionRepository(app: Application) : AndroidViewModel(app) {
+    private val context = app.applicationContext
     private val db = AppDatabase.getInstance(context)
+    // Read the saved server URL from encrypted prefs. If empty (user not
+    // logged in yet), API calls will fail gracefully — the session list
+    // just shows local cache.
+    private val serverUrl = AuthPrefsRepository(context).getServerUrl() ?: ""
     private val client = HttpClientProvider.create(serverUrl)
 
     fun getActiveSessions(): Flow<List<SessionEntity>> = db.sessionDao().getActiveSessions()
@@ -142,11 +145,6 @@ class SessionRepository(application: Application, private val serverUrl: String)
         }
     } catch (e: Exception) {
         Result.failure(e)
-    }
-
-    class Factory(private val application: Application, private val serverUrl: String) : ViewModelProvider.Factory {
-        @Suppress("UNCHECKED_CAST")
-        override fun <T : ViewModel> create(modelClass: Class<T>): T = SessionRepository(application, serverUrl) as T
     }
 
     // DTOs

@@ -1,7 +1,7 @@
 package dev.hermes.core.auth
 
-import android.content.Context
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import dev.hermes.core.network.ApiEndpoint
@@ -66,8 +66,9 @@ sealed interface LoginResult {
  * Extends [ViewModel] so it survives configuration changes and can be
  * obtained via `viewModel()` in Compose.
  */
-class AuthRepository(context: Context) : ViewModel() {
+class AuthRepository(app: Application) : AndroidViewModel(app) {
 
+    private val context = app.applicationContext
     private val _authState = MutableStateFlow<AuthState>(AuthState.LoggedOut)
     val authState: StateFlow<AuthState> = _authState.asStateFlow()
 
@@ -231,7 +232,7 @@ class AuthRepository(context: Context) : ViewModel() {
  * The URL is the only thing we persist — auth cookies live in the
  * HttpClient's cookie jar and are recreated on each login.
  */
-class AuthPrefsRepository(context: Context) {
+class AuthPrefsRepository(private val context: android.content.Context) {
 
     private val masterKey = MasterKey.Builder(context)
         .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)

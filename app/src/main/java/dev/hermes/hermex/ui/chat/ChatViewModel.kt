@@ -1,24 +1,31 @@
 package dev.hermes.hermex.ui.chat
 
-import androidx.lifecycle.SavedStateHandle
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import dev.hermes.core.auth.AuthRepository
+import dev.hermes.core.auth.AuthPrefsRepository
 import dev.hermes.core.auth.AuthState
 import dev.hermes.core.data.SessionRepository
 import dev.hermes.core.network.ChatStream
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
-class ChatViewModel(
-    private val sessionRepository: SessionRepository,
-    private val authRepository: AuthRepository,
-    private val chatStream: ChatStream
-) : ViewModel() {
+/**
+ * Drives the chat screen: holds the message list, streaming state, and
+ * error state. Constructs its own [ChatStream] from the saved server URL.
+ *
+ * Extends [AndroidViewModel] so it can be created by the default Compose
+ * `viewModel()` factory with just an [Application] parameter.
+ */
+class ChatViewModel(app: Application) : AndroidViewModel(app) {
+
+    private val context = app.applicationContext
+    private val sessionRepository = SessionRepository(app)
+    private val serverUrl = AuthPrefsRepository(context).getServerUrl() ?: ""
+    private val chatStream = ChatStream(serverUrl)
 
     private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
     val messages: StateFlow<List<ChatMessage>> = _messages.asStateFlow()
@@ -80,7 +87,11 @@ class ChatViewModel(
     private fun startStream(sessionId: String, message: String) {
         _error.value = null
         _isStreaming.value = true
-        val serverUrl = (authRepository.authState.value as? AuthState.LoggedIn)?.serverUrl ?: return
+        if (serverUrl.isEmpty()) {
+            _error.value = "Not connected to a server"
+            _isStreaming.value = false
+            return
+        }
         streamJob = viewModelScope.launch {
             try {
                 val start = chatStream.startChat(
