@@ -1,12 +1,10 @@
 package dev.hermes.hermex.ui.chat
 
-import android.app.Application
-import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import dev.hermes.core.auth.AuthPrefsRepository
-import dev.hermes.core.auth.AuthState
 import dev.hermes.core.data.SessionRepository
 import dev.hermes.core.network.ChatStream
+import dev.hermes.core.network.friendlyError
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -15,23 +13,20 @@ import kotlinx.coroutines.launch
 
 /**
  * Drives the chat screen: holds the message list, streaming state, and
- * error state. Constructs its own [ChatStream] from the saved server URL.
+ * error state. Uses the [SessionRepository] and [ChatStream] passed from
+ * [dev.hermes.hermex.ui.HermexApp] so all screens share the same
+ * Activity-scoped instances (and the same auth cookie).
  *
- * Extends [AndroidViewModel] so it can be created by the default Compose
- * `viewModel()` factory with just an [Application] parameter.
+ * Extends [ViewModel] (not AndroidViewModel) because it doesn't need
+ * an Application context — all its dependencies are injected.
  */
-class ChatViewModel(app: Application) : AndroidViewModel(app) {
-
-    private val context = app.applicationContext
-    private val sessionRepository = SessionRepository(app)
-    private val serverUrl = AuthPrefsRepository(context).getServerUrl() ?: ""
-    private val chatStream = ChatStream(serverUrl)
+class ChatViewModel(
+    private val sessionRepository: SessionRepository,
+    private val chatStream: ChatStream
+) : ViewModel() {
 
     private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
     val messages: StateFlow<List<ChatMessage>> = _messages.asStateFlow()
-
-    private val _newMessage = MutableStateFlow("")
-    val newMessage: StateFlow<String> = _newMessage.asStateFlow()
 
     private val _isStreaming = MutableStateFlow(false)
     val isStreaming: StateFlow<Boolean> = _isStreaming.asStateFlow()
@@ -41,30 +36,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     private var streamJob: Job? = null
 
-    fun onMessageChanged(text: String) {
-        _newMessage.value = text
-        _error.value = null
-    }
-
-    fun sendMessage(text: String, sessionId: String) {
-        if (text.isBlank() || _isStreaming.value) return
-        val userMessage = ChatMessage(
-            messageId = "local_user_${System.currentTimeMillis()}",
-            role = "user",
-            content = text.trim(),
-            timestamp = System.currentTimeMillis()
-        )
-        _messages.value = _messages.value + userMessage
-        _newMessage.value = ""
-        startStream(sessionId = sessionId, message = text.trim())
-    }
-
-    fun stopStreaming() {
-        streamJob?.cancel()
-        streamJob = null
-        _isStreaming.value = false
-    }
-
+    /**
+     * Load existing messages for [sessionId] from the local Room cache.
+     * The cache is filled by [SessionRepository.loadSession] which is
+     * called when the user navigates into the chat screen.
+     */
     fun loadMessages(sessionId: String) {
         viewModelScope.launch {
             try {
@@ -79,19 +55,38 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
             } catch (e: Exception) {
-                _error.value = e.message
+                _error.value = friendlyError(e)
             }
         }
     }
 
-    private fun startStream(sessionId: String, message: String) {
+    /**
+     * Send [text] to the server as a new message in [sessionId], then
+     * stream the assistant's response token-by-token into [_messages].
+     */
+    fun sendMessage(text: String, sessionId: String) {
+        if (text.isBlank() || _isStreaming.value) return
+
+        // Optimistically add the user's message to the list immediately
+        val userMessage = ChatMessage(
+            messageId = "local_user_${System.currentTimeMillis()}",
+            role = "user",
+            content = text.trim(),
+            timestamp = System.currentTimeMillis()
+        )
+        _messages.value = _messages.value + userMessage
         _error.value = null
+        startStream(sessionId = sessionId, message = text.trim())
+    }
+
+    fun stopStreaming() {
+        streamJob?.cancel()
+        streamJob = null
+        _isStreaming.value = false
+    }
+
+    private fun startStream(sessionId: String, message: String) {
         _isStreaming.value = true
-        if (serverUrl.isEmpty()) {
-            _error.value = "Not connected to a server"
-            _isStreaming.value = false
-            return
-        }
         streamJob = viewModelScope.launch {
             try {
                 val start = chatStream.startChat(
@@ -112,14 +107,24 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     _isStreaming.value = false
                     return@launch
                 }
-                val streamId = start.getOrNull()?.stream_id ?: return@launch
+                val streamId = start.getOrNull()?.stream_id ?: run {
+                    _error.value = "No stream ID returned"
+                    _isStreaming.value = false
+                    return@launch
+                }
+
+                // Collect SSE events until the stream completes
                 chatStream.streamEvents(streamId).collect { event ->
                     when (event) {
                         is ChatStream.StreamEvent.Token -> {
-                            val existing = _messages.value.toMutableList()
+                            // Append the token to the last assistant message,
+                            // or create a new one if there isn't one yet
+                            val existing = _messages.value
                             val last = existing.lastOrNull()
                             val updated = if (last != null && last.role == "assistant") {
-                                existing.toMutableList().also { it[it.size - 1] = last.copy(content = last.content + event.token) }
+                                existing.toMutableList().also {
+                                    it[it.size - 1] = last.copy(content = last.content + event.token)
+                                }
                             } else {
                                 existing + ChatMessage(
                                     messageId = "stream_${System.currentTimeMillis()}",
@@ -139,7 +144,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
             } catch (e: Exception) {
-                _error.value = e.message ?: "Stream error"
+                _error.value = friendlyError(e)
             } finally {
                 _isStreaming.value = false
                 streamJob = null

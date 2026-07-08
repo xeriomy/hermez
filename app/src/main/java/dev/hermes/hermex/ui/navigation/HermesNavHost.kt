@@ -7,6 +7,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
 import dev.hermes.core.auth.AuthRepository
+import dev.hermes.core.auth.AuthState
 import dev.hermes.core.data.SessionRepository
 import dev.hermes.hermex.ui.chat.ChatScreen
 import dev.hermes.hermex.ui.login.LoginScreen
@@ -39,6 +40,10 @@ fun HermesNavHost(
     authRepository: AuthRepository,
     sessionRepository: SessionRepository
 ) {
+    // Read the current server URL from authState so ChatScreen can build
+    // its ChatStream with the right base URL.
+    val serverUrl = (authRepository.authState.value as? AuthState.LoggedIn)?.serverUrl ?: ""
+
     NavHost(
         navController = navController,
         startDestination = startDestination
@@ -66,6 +71,8 @@ fun HermesNavHost(
             val sessionId = backStackEntry.arguments?.getString(Routes.CHAT_ARG).orEmpty()
             ChatScreen(
                 sessionId = sessionId,
+                sessionRepository = sessionRepository,
+                serverUrl = serverUrl,
                 onBack = { navController.popBackStack() }
             )
         }

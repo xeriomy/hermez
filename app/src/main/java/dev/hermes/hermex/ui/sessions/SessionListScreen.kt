@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Logout
 import androidx.compose.material.icons.filled.PushPin
@@ -54,6 +55,7 @@ fun SessionListScreen(
     val activeSessions by sessionRepository.getActiveSessions()
         .collectAsStateWithLifecycle(initialValue = emptyList())
     var isRefreshing by remember { mutableStateOf(false) }
+    var isCreatingSession by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var hasAutoRefreshed by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
@@ -72,9 +74,27 @@ fun SessionListScreen(
         }
     }
 
-    // Auto-refresh ONCE when the screen first appears. Previously this
-    // re-fired on every serverUrl change (which happened on every authState
-    // emission), causing repeated network calls and UI lag.
+    fun createNewSession() {
+        if (!isCreatingSession) {
+            isCreatingSession = true
+            scope.launch {
+                val result = sessionRepository.createSession(
+                    workspace = null,
+                    model = null,
+                    modelProvider = null,
+                    profile = null
+                )
+                result.onSuccess { session ->
+                    onSessionClick(session.sessionId)
+                }.onFailure { e ->
+                    errorMessage = e.message ?: "Failed to create session"
+                }
+                isCreatingSession = false
+            }
+        }
+    }
+
+    // Auto-refresh ONCE when the screen first appears.
     LaunchedEffect(Unit) {
         if (!hasAutoRefreshed) {
             hasAutoRefreshed = true
@@ -86,14 +106,18 @@ fun SessionListScreen(
         TopAppBar(
             title = { Text("Sessions") },
             actions = {
-                IconButton(
-                    onClick = { doRefresh() },
-                    enabled = !isRefreshing
-                ) {
+                IconButton(onClick = { doRefresh() }, enabled = !isRefreshing) {
                     if (isRefreshing) {
                         CircularProgressIndicator(modifier = Modifier.size(24.dp))
                     } else {
                         Icon(Icons.Default.Refresh, contentDescription = "Refresh")
+                    }
+                }
+                IconButton(onClick = { createNewSession() }, enabled = !isCreatingSession) {
+                    if (isCreatingSession) {
+                        CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                    } else {
+                        Icon(Icons.Default.Add, contentDescription = "New session")
                     }
                 }
                 IconButton(onClick = { authRepository.logout() }) {
@@ -146,8 +170,16 @@ fun SessionListScreen(
                         else "Tap + to start your first conversation.",
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    Button(onClick = { onSessionClick("new") }) {
-                        Text("New Session")
+                    Button(onClick = { createNewSession() }, enabled = !isCreatingSession) {
+                        if (isCreatingSession) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.onPrimary
+                            )
+                        } else {
+                            Text("New Session")
+                        }
                     }
                     if (errorMessage == null) {
                         androidx.compose.material3.TextButton(onClick = { doRefresh() }) {
