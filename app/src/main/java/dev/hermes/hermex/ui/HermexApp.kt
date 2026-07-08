@@ -13,6 +13,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.rememberNavController
 import dev.hermes.core.auth.AuthRepository
 import dev.hermes.core.auth.AuthState
+import dev.hermes.core.data.SessionRepository
 import dev.hermes.hermex.ui.navigation.HermesNavHost
 import dev.hermes.hermex.ui.navigation.Routes
 
@@ -20,21 +21,17 @@ import dev.hermes.hermex.ui.navigation.Routes
  * The root composable. Hosts the [HermesNavHost] and observes
  * [AuthRepository.authState] to drive login↔session-list routing.
  *
- * The NavHost's `startDestination` is chosen ONCE at first composition
- * based on the initial auth state — so we don't flash the login screen
- * on cold start when the user is already logged in. After that, all
- * navigation is driven by the [LaunchedEffect] below, which fires
- * whenever `authState` changes.
- *
- * Why `remember { }` (no key) for startDestination: if we keyed it on
- * `authState`, the entire NavHost would be recreated on every auth
- * change (including logout), discarding the back stack and causing the
- * "logout hangs" bug. Instead, we compute it once and let the
- * LaunchedEffect handle navigation imperatively.
+ * CRITICAL: [authRepository] and [sessionRepository] are created HERE via
+ * `viewModel()` (scoped to the Activity) and passed DOWN to all screens.
+ * If screens call `viewModel()` themselves, they get a DIFFERENT instance
+ * scoped to their NavBackStackEntry — and authState changes in the login
+ * screen's instance never reach this observer, so navigation never fires.
+ * That was the root cause of "Connect does nothing".
  */
 @Composable
 fun HermexApp() {
     val authRepository: AuthRepository = viewModel()
+    val sessionRepository: SessionRepository = viewModel()
     val authState by authRepository.authState.collectAsStateWithLifecycle()
     val navController = rememberNavController()
 
@@ -51,20 +48,12 @@ fun HermexApp() {
     LaunchedEffect(authState) {
         when (authState) {
             AuthState.LoggedOut -> {
-                // Pop the ENTIRE back stack and show login as the new root.
-                // popUpTo(0) { inclusive = true } clears every destination
-                // including the start destination, then navigate(LOGIN)
-                // creates login as the sole entry on the back stack.
                 navController.navigate(Routes.LOGIN) {
                     popUpTo(0) { inclusive = true }
                     launchSingleTop = true
                 }
             }
             is AuthState.LoggedIn -> {
-                // Only navigate if we're currently on the login screen.
-                // The login screen's onLoggedIn callback also navigates
-                // to sessions — this is the backstop for cold-start
-                // restoration where authState was already LoggedIn.
                 val current = navController.currentDestination?.route
                 if (current == Routes.LOGIN) {
                     navController.navigate(Routes.SESSIONS) {
@@ -82,7 +71,9 @@ fun HermexApp() {
     ) {
         HermesNavHost(
             navController = navController,
-            startDestination = startDestination
+            startDestination = startDestination,
+            authRepository = authRepository,
+            sessionRepository = sessionRepository
         )
     }
 }

@@ -209,20 +209,26 @@ class AuthRepository(app: Application) : AndroidViewModel(app) {
  * EncryptedSharedPreferences-backed storage for the user's server URL.
  * The URL is the only thing we persist — auth cookies live in the
  * HttpClient's cookie jar and are recreated on each login.
+ *
+ * The encrypted prefs are lazily initialized on first access (not in
+ * the constructor) because MasterKey + EncryptedSharedPreferences
+ * creation involves Android Keystore operations that can take 100-500ms
+ * on first launch. Doing it lazily keeps the Activity startup fast.
  */
 class AuthPrefsRepository(private val context: android.content.Context) {
 
-    private val masterKey = MasterKey.Builder(context)
-        .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-        .build()
-
-    private val encryptedPrefs = EncryptedSharedPreferences.create(
-        context,
-        "hermes_auth_prefs",
-        masterKey,
-        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-    )
+    private val encryptedPrefs by lazy {
+        val masterKey = MasterKey.Builder(context)
+            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+            .build()
+        EncryptedSharedPreferences.create(
+            context,
+            "hermes_auth_prefs",
+            masterKey,
+            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+        )
+    }
 
     fun saveServerUrl(url: String) {
         encryptedPrefs.edit().putString(KEY_SERVER_URL, url).apply()

@@ -22,7 +22,6 @@ import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -46,7 +45,6 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.hermes.core.auth.AuthRepository
 import dev.hermes.core.auth.ConnectionProbeResult
 import dev.hermes.core.auth.LoginResult
@@ -66,15 +64,11 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LoginScreen(
-    authRepository: AuthRepository = viewModel(),
-    onLoggedIn: () -> Unit = {}
+    authRepository: AuthRepository
 ) {
-    // NOTE: We do NOT observe authState here. The host HermexApp already
-    // observes authState and navigates to sessions when it flips to
-    // LoggedIn. Having two LaunchedEffects racing on the same state
-    // caused navigation glitches. The onLoggedIn callback is kept for
-    // backwards compatibility but is intentionally not invoked —
-    // HermexApp's LaunchedEffect handles the transition.
+    // authRepository is passed from HermexApp so all screens share the
+    // SAME instance. When login() sets authState = LoggedIn, HermexApp's
+    // LaunchedEffect sees it and navigates to sessions.
 
     var serverUrl by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
@@ -222,10 +216,7 @@ fun LoginScreen(
                         }
                     },
                     enabled = canSubmit,
-                    modifier = Modifier.weight(1f),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.primary
-                    )
+                    modifier = Modifier.weight(1f)
                 ) {
                     if (isConnecting) {
                         CircularProgressIndicator(
