@@ -40,6 +40,14 @@ class SessionRepository(app: Application) : AndroidViewModel(app) {
 
     fun getMessages(sessionId: String, limit: Int = 50): Flow<List<MessageEntity>> = db.messageDao().getMessages(sessionId, limit)
 
+    /**
+     * Get messages older than [beforeTimestamp] for pagination ("Load more").
+     * One-shot suspend read (not a Flow) — returns up to [limit] messages
+     * with timestamps strictly less than [beforeTimestamp], newest first.
+     */
+    suspend fun getMessagesBefore(sessionId: String, beforeTimestamp: Long, limit: Int = 20): List<MessageEntity> =
+        db.messageDao().getMessagesBefore(sessionId, beforeTimestamp, limit)
+
     suspend fun refreshSessions(): Result<List<SessionEntity>> = runCatching {
         val client = client() ?: throw Exception("Not connected to a server. Log in first.")
         val response = client.get(ApiEndpoint.Sessions.path)

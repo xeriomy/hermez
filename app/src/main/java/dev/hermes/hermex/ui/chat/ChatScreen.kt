@@ -27,6 +27,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -87,14 +88,13 @@ fun ChatScreen(
     val listState = rememberLazyListState()
 
     // Load existing messages for this session when the screen first appears.
-    // Also fetch fresh messages from the server to update the cache.
+    // ChatViewModel.loadMessages() guards against reloading if already loaded.
     LaunchedEffect(sessionId) {
         chatViewModel.loadMessages(sessionId)
-        sessionRepository.loadSession(sessionId)
     }
 
-    // Auto-scroll to the bottom when new messages arrive
-    LaunchedEffect(messages.size) {
+    // Auto-scroll to the bottom when new messages arrive or streaming progresses
+    LaunchedEffect(messages.size, isStreaming) {
         if (messages.isNotEmpty()) {
             listState.animateScrollToItem(messages.size - 1)
         }
@@ -102,7 +102,18 @@ fun ChatScreen(
 
     Column(modifier = Modifier.fillMaxSize()) {
         TopAppBar(
-            title = { Text("Chat") },
+            title = {
+                Column {
+                    Text("Chat")
+                    if (messages.isNotEmpty()) {
+                        Text(
+                            text = "${messages.size} messages",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            },
             navigationIcon = {
                 IconButton(onClick = onBack) {
                     Icon(
@@ -122,10 +133,25 @@ fun ChatScreen(
             contentPadding = PaddingValues(vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            // "Load more" button at the top (only if we have messages)
+            if (messages.isNotEmpty()) {
+                item {
+                    Box(
+                        modifier = Modifier.fillMaxWidth(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        TextButton(onClick = { chatViewModel.loadMoreMessages(sessionId) }) {
+                            Text("Load more messages")
+                        }
+                    }
+                }
+            }
+
             items(messages) { msg ->
                 MessageBubble(message = msg)
             }
 
+            // Streaming indicator at the bottom
             if (isStreaming) {
                 item {
                     Box(
@@ -153,6 +179,7 @@ fun ChatScreen(
                     label = { Text("Message") },
                     singleLine = false,
                     maxLines = 5,
+                    enabled = !isStreaming,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
