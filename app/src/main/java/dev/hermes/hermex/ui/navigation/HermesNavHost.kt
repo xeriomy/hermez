@@ -7,7 +7,6 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
 import dev.hermes.core.auth.AuthRepository
-import dev.hermes.core.auth.AuthState
 import dev.hermes.core.data.SessionRepository
 import dev.hermes.hermex.ui.chat.ChatScreen
 import dev.hermes.hermex.ui.login.LoginScreen
@@ -28,22 +27,21 @@ object Routes {
 /**
  * The root navigation graph. Hosted by [dev.hermes.hermex.ui.HermexApp].
  *
- * [authRepository] and [sessionRepository] are passed DOWN from HermexApp
- * (where they're scoped to the Activity) so every screen shares the SAME
- * instance. This is critical — if screens create their own via viewModel(),
- * they get NavBackStackEntry-scoped instances that don't share state.
+ * [authRepository], [sessionRepository], and [serverUrl] are passed DOWN
+ * from HermexApp (where they're scoped to the Activity and authState is
+ * observed) so every screen shares the SAME instances and the SAME
+ * server URL. This is critical — if screens create their own via
+ * viewModel(), they get NavBackStackEntry-scoped instances that don't
+ * share state.
  */
 @Composable
 fun HermesNavHost(
     navController: NavHostController,
     startDestination: String,
     authRepository: AuthRepository,
-    sessionRepository: SessionRepository
+    sessionRepository: SessionRepository,
+    serverUrl: String
 ) {
-    // Read the current server URL from authState so ChatScreen can build
-    // its ChatStream with the right base URL.
-    val serverUrl = (authRepository.authState.value as? AuthState.LoggedIn)?.serverUrl ?: ""
-
     NavHost(
         navController = navController,
         startDestination = startDestination

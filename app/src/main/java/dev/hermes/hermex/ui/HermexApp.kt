@@ -35,6 +35,11 @@ fun HermexApp() {
     val authState by authRepository.authState.collectAsStateWithLifecycle()
     val navController = rememberNavController()
 
+    // Extract the server URL from authState so we can pass it down to
+    // ChatScreen (which needs it to build a ChatStream). Doing this here
+    // (where authState is observed) ensures it updates on login/logout.
+    val serverUrl = (authState as? AuthState.LoggedIn)?.serverUrl ?: ""
+
     // Compute start destination ONCE. Subsequent auth changes are handled
     // by the LaunchedEffect below — we do NOT want to recreate the NavHost.
     val startDestination = remember {
@@ -73,7 +78,8 @@ fun HermexApp() {
             navController = navController,
             startDestination = startDestination,
             authRepository = authRepository,
-            sessionRepository = sessionRepository
+            sessionRepository = sessionRepository,
+            serverUrl = serverUrl
         )
     }
 }

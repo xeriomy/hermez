@@ -51,7 +51,8 @@ import kotlinx.serialization.json.Json
  */
 class ChatStream(
     private val serverUrl: String,
-    private val baseClient: HttpClient = SharedHttpClient.client(serverUrl) ?: HttpClient(OkHttp)
+    private val baseClient: HttpClient = SharedHttpClient.client(serverUrl)
+        ?: createFallbackClient(serverUrl)
 ) {
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
@@ -218,4 +219,29 @@ class ChatStream(
         val status: String, // "active" | "completed" | "failed"
         val session_id: String?
     )
+}
+
+/**
+ * Fallback client used when [SharedHttpClient.client] returns null
+ * (e.g. serverUrl is empty or the shared client hasn't been created yet).
+ *
+ * Installs ContentNegotiation (JSON) and HttpCookies (sharing the same
+ * cookie storage as SharedHttpClient) so that serialization + auth
+ * cookies still work even without the shared client.
+ */
+private fun createFallbackClient(serverUrl: String): HttpClient {
+    return HttpClient(OkHttp) {
+        expectSuccess = false
+        install(ContentNegotiation) {
+            json(Json { ignoreUnknownKeys = true })
+        }
+        install(HttpCookies) {
+            storage = SharedHttpClient.cookieStorage
+        }
+        defaultRequest {
+            url(serverUrl)
+            headers.remove(HttpHeaders.Origin)
+            headers.remove("Referer")
+        }
+    }
 }

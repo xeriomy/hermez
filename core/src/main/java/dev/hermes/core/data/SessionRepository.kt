@@ -183,7 +183,7 @@ class SessionRepository(app: Application) : AndroidViewModel(app) {
 
     @Serializable
     private data class SessionDto(
-        val session_id: String,
+        val session_id: String = "",
         val title: String? = null,
         // hermes-webui sends timestamps as float Unix epoch (e.g. 1783449907.2857065)
         val created_at: Double? = null,
@@ -220,7 +220,7 @@ class SessionRepository(app: Application) : AndroidViewModel(app) {
 
     @Serializable
     private data class SessionDetailDto(
-        val session_id: String,
+        val session_id: String = "",
         val title: String? = null,
         // hermes-webui sends timestamps as float Unix epoch
         val created_at: Double? = null,
@@ -255,9 +255,9 @@ class SessionRepository(app: Application) : AndroidViewModel(app) {
 
     @Serializable
     private data class MessageDto(
-        val message_id: String,
-        val role: String,
-        val content: String,
+        val message_id: String = "",
+        val role: String = "",
+        val content: String = "",
         // hermes-webui sends timestamps as float Unix epoch
         val timestamp: Double? = null,
         val model: String? = null,
