@@ -170,12 +170,12 @@ class ChatViewModel(
                 )
                 if (start.isFailure) {
                     val exception = start.exceptionOrNull()
-                    val message = exception?.message ?: "Start failed"
+                    val errorMsg = exception?.message ?: "Start failed"
                     // 409 Conflict = there's already an active stream on this session
-                    _error.value = if (message.contains("409") || message.contains("Conflict")) {
+                    _error.value = if (errorMsg.contains("409") || errorMsg.contains("Conflict")) {
                         "A response is already streaming. Wait for it to finish or tap Stop first."
                     } else {
-                        message
+                        errorMsg
                     }
                     _isStreaming.value = false
                     return@launch
