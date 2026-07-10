@@ -55,6 +55,7 @@ import dev.hermes.core.network.ChatStream
 fun ChatScreen(
     sessionId: String,
     sessionRepository: SessionRepository,
+    configRepository: dev.hermes.core.data.ConfigRepository,
     serverUrl: String,
     onBack: () -> Unit = {}
 ) {
@@ -74,6 +75,23 @@ fun ChatScreen(
     val error by chatViewModel.error.collectAsStateWithLifecycle()
     val remainingToLoad by chatViewModel.remainingToLoad.collectAsStateWithLifecycle()
     val isInitialLoading by chatViewModel.isInitialLoading.collectAsStateWithLifecycle()
+
+    // Config (models, workspaces, profiles)
+    val models by configRepository.models.collectAsStateWithLifecycle()
+    val workspaces by configRepository.workspaces.collectAsStateWithLifecycle()
+    val profiles by configRepository.profiles.collectAsStateWithLifecycle()
+
+    // Selected config state
+    var selectedModel by remember { mutableStateOf<dev.hermes.core.data.ModelOption?>(null) }
+    var selectedWorkspace by remember { mutableStateOf<String?>(null) }
+    var selectedProfile by remember { mutableStateOf<String?>(null) }
+
+    // Load config when the screen appears
+    LaunchedEffect(serverUrl) {
+        if (serverUrl.isNotEmpty()) {
+            configRepository.loadConfig()
+        }
+    }
 
     var composerText by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
@@ -155,6 +173,20 @@ fun ChatScreen(
             }
         }
 
+        // Config picker row (model, workspace, profile)
+        ConfigPickerRow(
+            models = models,
+            workspaces = workspaces,
+            profiles = profiles,
+            selectedModel = selectedModel,
+            selectedWorkspace = selectedWorkspace,
+            selectedProfile = selectedProfile,
+            onModelSelected = { selectedModel = it },
+            onWorkspaceSelected = { selectedWorkspace = it },
+            onProfileSelected = { selectedProfile = it },
+            enabled = !isStreaming
+        )
+
         // Composer
         Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
             Row(
@@ -185,7 +217,14 @@ fun ChatScreen(
                             val text = composerText.trim()
                             if (text.isNotEmpty()) {
                                 composerText = ""
-                                chatViewModel.sendMessage(text, sessionId)
+                                chatViewModel.sendMessage(
+                                    text = text,
+                                    sessionId = sessionId,
+                                    model = selectedModel?.id,
+                                    provider = selectedModel?.provider,
+                                    workspace = selectedWorkspace,
+                                    profile = selectedProfile
+                                )
                             }
                         },
                         enabled = composerText.trim().isNotEmpty()
@@ -282,3 +321,156 @@ data class ChatMessage(
     val content: String,
     val timestamp: Long
 )
+
+/**
+ * A horizontal row of dropdown pickers for model, workspace, and profile.
+ * Shown above the composer. Each picker is only shown if the server has
+ * options available for it.
+ */
+@Composable
+fun ConfigPickerRow(
+    models: List<dev.hermes.core.data.ModelOption>,
+    workspaces: List<String>,
+    profiles: List<String>,
+    selectedModel: dev.hermes.core.data.ModelOption?,
+    selectedWorkspace: String?,
+    selectedProfile: String?,
+    onModelSelected: (dev.hermes.core.data.ModelOption?) -> Unit,
+    onWorkspaceSelected: (String?) -> Unit,
+    onProfileSelected: (String?) -> Unit,
+    enabled: Boolean
+) {
+    // Only show the row if at least one picker has options
+    if (models.isEmpty() && workspaces.isEmpty() && profiles.isEmpty()) return
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        // Model picker
+        if (models.isNotEmpty()) {
+            var expanded by remember { mutableStateOf(false) }
+            Box {
+                androidx.compose.material3.AssistChip(
+                    onClick = { if (enabled) expanded = true },
+                    label = {
+                        Text(
+                            text = selectedModel?.name ?: "Model",
+                            fontSize = 12.sp,
+                            maxLines = 1
+                        )
+                    },
+                    enabled = enabled
+                )
+                androidx.compose.material3.DropdownMenu(
+                    expanded = expanded,
+                    onDismissRequest = { expanded = false }
+                ) {
+                    if (selectedModel != null) {
+                        androidx.compose.material3.DropdownMenuItem(
+                            text = { Text("Default") },
+                            onClick = {
+                                onModelSelected(null)
+                                expanded = false
+                            }
+                        )
+                    }
+                    models.forEach { model ->
+                        androidx.compose.material3.DropdownMenuItem(
+                            text = { Text(model.toString()) },
+                            onClick = {
+                                onModelSelected(model)
+                                expanded = false
+                            }
+                        )
+                    }
+                }
+            }
+        }
+
+        // Workspace picker
+        if (workspaces.isNotEmpty()) {
+            var expanded by remember { mutableStateOf(false) }
+            Box {
+                androidx.compose.material3.AssistChip(
+                    onClick = { if (enabled) expanded = true },
+                    label = {
+                        Text(
+                            text = selectedWorkspace ?: "Workspace",
+                            fontSize = 12.sp,
+                            maxLines = 1
+                        )
+                    },
+                    enabled = enabled
+                )
+                androidx.compose.material3.DropdownMenu(
+                    expanded = expanded,
+                    onDismissRequest = { expanded = false }
+                ) {
+                    if (selectedWorkspace != null) {
+                        androidx.compose.material3.DropdownMenuItem(
+                            text = { Text("Default") },
+                            onClick = {
+                                onWorkspaceSelected(null)
+                                expanded = false
+                            }
+                        )
+                    }
+                    workspaces.forEach { ws ->
+                        androidx.compose.material3.DropdownMenuItem(
+                            text = { Text(ws) },
+                            onClick = {
+                                onWorkspaceSelected(ws)
+                                expanded = false
+                            }
+                        )
+                    }
+                }
+            }
+        }
+
+        // Profile picker
+        if (profiles.isNotEmpty()) {
+            var expanded by remember { mutableStateOf(false) }
+            Box {
+                androidx.compose.material3.AssistChip(
+                    onClick = { if (enabled) expanded = true },
+                    label = {
+                        Text(
+                            text = selectedProfile ?: "Profile",
+                            fontSize = 12.sp,
+                            maxLines = 1
+                        )
+                    },
+                    enabled = enabled
+                )
+                androidx.compose.material3.DropdownMenu(
+                    expanded = expanded,
+                    onDismissRequest = { expanded = false }
+                ) {
+                    if (selectedProfile != null) {
+                        androidx.compose.material3.DropdownMenuItem(
+                            text = { Text("Default") },
+                            onClick = {
+                                onProfileSelected(null)
+                                expanded = false
+                            }
+                        )
+                    }
+                    profiles.forEach { p ->
+                        androidx.compose.material3.DropdownMenuItem(
+                            text = { Text(p) },
+                            onClick = {
+                                onProfileSelected(p)
+                                expanded = false
+                            }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}

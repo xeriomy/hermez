@@ -13,35 +13,21 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.rememberNavController
 import dev.hermes.core.auth.AuthRepository
 import dev.hermes.core.auth.AuthState
+import dev.hermes.core.data.ConfigRepository
 import dev.hermes.core.data.SessionRepository
 import dev.hermes.hermex.ui.navigation.HermesNavHost
 import dev.hermes.hermex.ui.navigation.Routes
 
-/**
- * The root composable. Hosts the [HermesNavHost] and observes
- * [AuthRepository.authState] to drive login↔session-list routing.
- *
- * CRITICAL: [authRepository] and [sessionRepository] are created HERE via
- * `viewModel()` (scoped to the Activity) and passed DOWN to all screens.
- * If screens call `viewModel()` themselves, they get a DIFFERENT instance
- * scoped to their NavBackStackEntry — and authState changes in the login
- * screen's instance never reach this observer, so navigation never fires.
- * That was the root cause of "Connect does nothing".
- */
 @Composable
 fun HermexApp() {
     val authRepository: AuthRepository = viewModel()
     val sessionRepository: SessionRepository = viewModel()
+    val configRepository: ConfigRepository = viewModel()
     val authState by authRepository.authState.collectAsStateWithLifecycle()
     val navController = rememberNavController()
 
-    // Extract the server URL from authState so we can pass it down to
-    // ChatScreen (which needs it to build a ChatStream). Doing this here
-    // (where authState is observed) ensures it updates on login/logout.
     val serverUrl = (authState as? AuthState.LoggedIn)?.serverUrl ?: ""
 
-    // Compute start destination ONCE. Subsequent auth changes are handled
-    // by the LaunchedEffect below — we do NOT want to recreate the NavHost.
     val startDestination = remember {
         when (authRepository.authState.value) {
             is AuthState.LoggedIn -> Routes.SESSIONS
@@ -49,7 +35,6 @@ fun HermexApp() {
         }
     }
 
-    // Drive navigation when auth state changes.
     LaunchedEffect(authState) {
         when (authState) {
             AuthState.LoggedOut -> {
@@ -79,6 +64,7 @@ fun HermexApp() {
             startDestination = startDestination,
             authRepository = authRepository,
             sessionRepository = sessionRepository,
+            configRepository = configRepository,
             serverUrl = serverUrl
         )
     }

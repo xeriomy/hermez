@@ -7,6 +7,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
 import dev.hermes.core.auth.AuthRepository
+import dev.hermes.core.data.ConfigRepository
 import dev.hermes.core.data.SessionRepository
 import dev.hermes.hermex.ui.chat.ChatScreen
 import dev.hermes.hermex.ui.login.LoginScreen
@@ -37,6 +38,7 @@ fun HermesNavHost(
     startDestination: String,
     authRepository: AuthRepository,
     sessionRepository: SessionRepository,
+    configRepository: ConfigRepository,
     serverUrl: String
 ) {
     NavHost(
@@ -90,6 +92,7 @@ fun HermesNavHost(
             ChatScreen(
                 sessionId = sessionId,
                 sessionRepository = sessionRepository,
+                configRepository = configRepository,
                 serverUrl = serverUrl,
                 onBack = { navController.popBackStack() }
             )

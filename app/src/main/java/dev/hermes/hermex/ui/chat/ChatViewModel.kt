@@ -146,7 +146,14 @@ class ChatViewModel(
         (remainingToLoad as MutableStateFlow).value = (total - _messages.value.size).coerceAtLeast(0)
     }
 
-    fun sendMessage(text: String, sessionId: String) {
+    fun sendMessage(
+        text: String,
+        sessionId: String,
+        model: String? = null,
+        provider: String? = null,
+        workspace: String? = null,
+        profile: String? = null
+    ) {
         if (text.isBlank() || _isStreaming.value) return
 
         val userMessage = ChatMessage(
@@ -157,7 +164,14 @@ class ChatViewModel(
         )
         _messages.value = _messages.value + userMessage
         _error.value = null
-        startStream(sessionId = sessionId, message = text.trim())
+        startStream(
+            sessionId = sessionId,
+            message = text.trim(),
+            model = model,
+            provider = provider,
+            workspace = workspace,
+            profile = profile
+        )
     }
 
     fun stopStreaming() {
@@ -166,7 +180,14 @@ class ChatViewModel(
         _isStreaming.value = false
     }
 
-    private fun startStream(sessionId: String, message: String) {
+    private fun startStream(
+        sessionId: String,
+        message: String,
+        model: String? = null,
+        provider: String? = null,
+        workspace: String? = null,
+        profile: String? = null
+    ) {
         _isStreaming.value = true
         streamJob = viewModelScope.launch {
             try {
@@ -174,13 +195,13 @@ class ChatViewModel(
                     ChatStream.ChatStartRequest(
                         session_id = sessionId,
                         message = message,
-                        model = null,
-                        provider = null,
+                        model = model,
+                        provider = provider,
                         reasoning = null,
-                        workspace = null,
-                        profile = null,
+                        workspace = workspace,
+                        profile = profile,
                         files = null,
-                        explicit_model_pick = false
+                        explicit_model_pick = model != null
                     )
                 )
                 if (start.isFailure) {
