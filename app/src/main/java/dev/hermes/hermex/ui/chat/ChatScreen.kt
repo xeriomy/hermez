@@ -233,8 +233,14 @@ fun MessageBubble(message: ChatMessage) {
             } else {
                 // Assistant messages: render markdown (code blocks, lists,
                 // bold, headers, etc.)
+                // Normalize content: some older cached messages have literal
+                // \n strings instead of actual newlines. Replace them so
+                // markdown renders correctly.
+                val normalizedContent = message.content
+                    .replace("\\n", "\n")
+                    .replace("\\r", "")
                 Markdown(
-                    content = message.content,
+                    content = normalizedContent,
                     modifier = Modifier.padding(16.dp)
                 )
             }

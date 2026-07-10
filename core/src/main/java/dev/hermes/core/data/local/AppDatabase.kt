@@ -7,7 +7,7 @@ import androidx.room.RoomDatabase
 
 @Database(
     entities = [SessionEntity::class, MessageEntity::class],
-    version = 1,
+    version = 2,  // bumped from 1 to clear old cache with literal \n strings
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
