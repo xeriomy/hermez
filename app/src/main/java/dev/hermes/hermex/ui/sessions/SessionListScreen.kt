@@ -12,18 +12,27 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Archive
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Logout
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -60,6 +69,10 @@ fun SessionListScreen(
     var hasAutoRefreshed by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
+    // State for session action dialogs
+    var sessionToRename by remember { mutableStateOf<SessionEntity?>(null) }
+    var sessionToDelete by remember { mutableStateOf<SessionEntity?>(null) }
+
     fun doRefresh() {
         if (!isRefreshing) {
             isRefreshing = true
@@ -90,6 +103,42 @@ fun SessionListScreen(
                     errorMessage = e.message ?: "Failed to create session"
                 }
                 isCreatingSession = false
+            }
+        }
+    }
+
+    fun renameSession(sessionId: String, newTitle: String) {
+        scope.launch {
+            val result = sessionRepository.renameSession(sessionId, newTitle)
+            result.onFailure { e ->
+                errorMessage = e.message ?: "Failed to rename session"
+            }
+        }
+    }
+
+    fun deleteSession(sessionId: String) {
+        scope.launch {
+            val result = sessionRepository.deleteSession(sessionId)
+            result.onFailure { e ->
+                errorMessage = e.message ?: "Failed to delete session"
+            }
+        }
+    }
+
+    fun togglePin(session: SessionEntity) {
+        scope.launch {
+            val result = sessionRepository.setPinned(session.sessionId, !session.pinned)
+            result.onFailure { e ->
+                errorMessage = e.message ?: "Failed to pin session"
+            }
+        }
+    }
+
+    fun toggleArchive(session: SessionEntity) {
+        scope.launch {
+            val result = sessionRepository.setArchived(session.sessionId, !session.archived)
+            result.onFailure { e ->
+                errorMessage = e.message ?: "Failed to archive session"
             }
         }
     }
@@ -149,7 +198,7 @@ fun SessionListScreen(
                     color = MaterialTheme.colorScheme.error,
                     modifier = Modifier.weight(1f)
                 )
-                androidx.compose.material3.TextButton(onClick = { doRefresh() }) {
+                TextButton(onClick = { doRefresh() }) {
                     Text("Retry")
                 }
             }
@@ -182,7 +231,7 @@ fun SessionListScreen(
                         }
                     }
                     if (errorMessage == null) {
-                        androidx.compose.material3.TextButton(onClick = { doRefresh() }) {
+                        TextButton(onClick = { doRefresh() }) {
                             Text("Refresh again")
                         }
                     }
@@ -205,19 +254,68 @@ fun SessionListScreen(
                 items(activeSessions) { session ->
                     SessionItem(
                         session = session,
-                        onClick = { onSessionClick(session.sessionId) }
+                        onClick = { onSessionClick(session.sessionId) },
+                        onRename = { sessionToRename = session },
+                        onDelete = { sessionToDelete = session },
+                        onTogglePin = { togglePin(session) },
+                        onToggleArchive = { toggleArchive(session) }
                     )
                 }
             }
         }
     }
+
+    // Rename dialog
+    sessionToRename?.let { session ->
+        RenameSessionDialog(
+            currentTitle = session.title ?: "",
+            onConfirm = { newTitle ->
+                renameSession(session.sessionId, newTitle)
+                sessionToRename = null
+            },
+            onDismiss = { sessionToRename = null }
+        )
+    }
+
+    // Delete confirmation dialog
+    sessionToDelete?.let { session ->
+        AlertDialog(
+            onDismissRequest = { sessionToDelete = null },
+            title = { Text("Delete session?") },
+            text = {
+                Text("Are you sure you want to delete \"${session.title ?: "Untitled"}\"? This cannot be undone.")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        deleteSession(session.sessionId)
+                        sessionToDelete = null
+                    }
+                ) {
+                    Text("Delete", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { sessionToDelete = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SessionItem(
     session: SessionEntity,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onRename: () -> Unit,
+    onDelete: () -> Unit,
+    onTogglePin: () -> Unit,
+    onToggleArchive: () -> Unit
 ) {
+    var menuExpanded by remember { mutableStateOf(false) }
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -227,21 +325,83 @@ fun SessionItem(
         Column(modifier = Modifier.padding(16.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
                     text = session.title ?: "Untitled",
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Medium,
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
                 )
                 if (session.pinned) {
                     Icon(
                         Icons.Default.PushPin,
                         contentDescription = "Pinned",
-                        tint = MaterialTheme.colorScheme.primary
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(18.dp)
                     )
+                }
+                // Overflow menu (3 dots)
+                Box {
+                    IconButton(onClick = { menuExpanded = true }) {
+                        Icon(
+                            Icons.Default.MoreVert,
+                            contentDescription = "More options",
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    DropdownMenu(
+                        expanded = menuExpanded,
+                        onDismissRequest = { menuExpanded = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text(if (session.pinned) "Unpin" else "Pin") },
+                            onClick = {
+                                menuExpanded = false
+                                onTogglePin()
+                            },
+                            leadingIcon = {
+                                Icon(Icons.Default.PushPin, contentDescription = null)
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Rename") },
+                            onClick = {
+                                menuExpanded = false
+                                onRename()
+                            },
+                            leadingIcon = {
+                                Icon(Icons.Outlined.Edit, contentDescription = null)
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text(if (session.archived) "Unarchive" else "Archive") },
+                            onClick = {
+                                menuExpanded = false
+                                onToggleArchive()
+                            },
+                            leadingIcon = {
+                                Icon(Icons.Default.Archive, contentDescription = null)
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
+                            onClick = {
+                                menuExpanded = false
+                                onDelete()
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Default.Delete,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.error
+                                )
+                            }
+                        )
+                    }
                 }
             }
             session.lastMessagePreview?.let { preview ->
@@ -274,6 +434,42 @@ fun SessionItem(
             }
         }
     }
+}
+
+@Composable
+fun RenameSessionDialog(
+    currentTitle: String,
+    onConfirm: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var newTitle by remember { mutableStateOf(currentTitle) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Rename session") },
+        text = {
+            OutlinedTextField(
+                value = newTitle,
+                onValueChange = { newTitle = it },
+                label = { Text("Session title") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onConfirm(newTitle.trim()) },
+                enabled = newTitle.trim().isNotEmpty()
+            ) {
+                Text("Save")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
 }
 
 private fun formatTimestamp(timestamp: Long): String {
