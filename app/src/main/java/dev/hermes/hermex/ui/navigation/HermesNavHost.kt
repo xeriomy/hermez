@@ -10,7 +10,9 @@ import dev.hermes.core.auth.AuthRepository
 import dev.hermes.core.data.SessionRepository
 import dev.hermes.hermex.ui.chat.ChatScreen
 import dev.hermes.hermex.ui.login.LoginScreen
+import dev.hermes.hermex.ui.sessions.ArchivedSessionsScreen
 import dev.hermes.hermex.ui.sessions.SessionListScreen
+import dev.hermes.hermex.ui.settings.SettingsScreen
 
 /**
  * Central place for all navigation routes.
@@ -18,6 +20,8 @@ import dev.hermes.hermex.ui.sessions.SessionListScreen
 object Routes {
     const val LOGIN = "login"
     const val SESSIONS = "sessions"
+    const val ARCHIVED = "archived"
+    const val SETTINGS = "settings"
     const val CHAT = "chat/{sessionId}"
     const val CHAT_ARG = "sessionId"
 
@@ -26,13 +30,6 @@ object Routes {
 
 /**
  * The root navigation graph. Hosted by [dev.hermes.hermex.ui.HermexApp].
- *
- * [authRepository], [sessionRepository], and [serverUrl] are passed DOWN
- * from HermexApp (where they're scoped to the Activity and authState is
- * observed) so every screen shares the SAME instances and the SAME
- * server URL. This is critical — if screens create their own via
- * viewModel(), they get NavBackStackEntry-scoped instances that don't
- * share state.
  */
 @Composable
 fun HermesNavHost(
@@ -56,7 +53,31 @@ fun HermesNavHost(
                 sessionRepository = sessionRepository,
                 onSessionClick = { sessionId ->
                     navController.navigate(Routes.chat(sessionId))
+                },
+                onShowArchived = {
+                    navController.navigate(Routes.ARCHIVED)
+                },
+                onShowSettings = {
+                    navController.navigate(Routes.SETTINGS)
                 }
+            )
+        }
+
+        composable(Routes.ARCHIVED) {
+            ArchivedSessionsScreen(
+                sessionRepository = sessionRepository,
+                onBack = { navController.popBackStack() },
+                onSessionClick = { sessionId ->
+                    navController.navigate(Routes.chat(sessionId))
+                }
+            )
+        }
+
+        composable(Routes.SETTINGS) {
+            SettingsScreen(
+                authRepository = authRepository,
+                sessionRepository = sessionRepository,
+                onBack = { navController.popBackStack() }
             )
         }
 

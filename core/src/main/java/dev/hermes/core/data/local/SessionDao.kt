@@ -38,4 +38,7 @@ interface SessionDao {
 
     @Query("UPDATE sessions SET projectId = :projectId WHERE sessionId = :sessionId")
     suspend fun moveSession(sessionId: String, projectId: String?)
+
+    @Query("DELETE FROM sessions")
+    suspend fun deleteAllSessions()
 }

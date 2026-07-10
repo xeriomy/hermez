@@ -15,10 +15,10 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Error
-import androidx.compose.material.icons.filled.Logout
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -59,7 +59,9 @@ import kotlinx.coroutines.launch
 fun SessionListScreen(
     authRepository: AuthRepository,
     sessionRepository: SessionRepository,
-    onSessionClick: (String) -> Unit = {}
+    onSessionClick: (String) -> Unit = {},
+    onShowArchived: () -> Unit = {},
+    onShowSettings: () -> Unit = {}
 ) {
     val activeSessions by sessionRepository.getActiveSessions()
         .collectAsStateWithLifecycle(initialValue = emptyList())
@@ -169,8 +171,11 @@ fun SessionListScreen(
                         Icon(Icons.Default.Add, contentDescription = "New session")
                     }
                 }
-                IconButton(onClick = { authRepository.logout() }) {
-                    Icon(Icons.Default.Logout, contentDescription = "Log out")
+                IconButton(onClick = onShowArchived) {
+                    Icon(Icons.Default.Archive, contentDescription = "Archived sessions")
+                }
+                IconButton(onClick = onShowSettings) {
+                    Icon(Icons.Default.Settings, contentDescription = "Settings")
                 }
             },
             colors = TopAppBarDefaults.topAppBarColors(

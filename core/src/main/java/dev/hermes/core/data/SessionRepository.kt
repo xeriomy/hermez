@@ -55,6 +55,16 @@ class SessionRepository(app: Application) : AndroidViewModel(app) {
     suspend fun getMessageCount(sessionId: String): Int =
         db.messageDao().getMessageCount(sessionId)
 
+    /**
+     * Clear ALL locally cached sessions and messages. The server is not
+     * contacted — this only wipes the Room database. Data will be re-fetched
+     * from the server on next refresh.
+     */
+    suspend fun clearAllCache() {
+        db.sessionDao().deleteAllSessions()
+        db.messageDao().deleteAllMessages()
+    }
+
     suspend fun refreshSessions(): Result<List<SessionEntity>> = runCatching {
         val client = client() ?: throw Exception("Not connected to a server. Log in first.")
         val response = client.get(ApiEndpoint.Sessions.path)
