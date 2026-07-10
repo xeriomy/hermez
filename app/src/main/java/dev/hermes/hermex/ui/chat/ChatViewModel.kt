@@ -7,24 +7,41 @@ import dev.hermes.core.network.ChatStream
 import dev.hermes.core.network.friendlyError
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 /**
- * Drives the chat screen: holds the message list, streaming state, and
- * error state. Uses the [SessionRepository] and [ChatStream] passed from
- * [dev.hermes.hermex.ui.HermexApp] so all screens share the same
- * Activity-scoped instances (and the same auth cookie).
+ * Drives the chat screen.
+ *
+ * **Loading strategy (local-first):**
+ *  1. Instantly observe the Room cache as a Flow — messages appear in
+ *     ~5ms, before any network request. This is how Claude/Gemini/
+ *     WhatsApp feel instant.
+ *  2. In the background, fetch fresh messages from the server via
+ *     loadSession() and write them to Room. The Flow observer picks
+ *     up the change and the UI updates automatically — no manual
+ *     reload needed.
+ *  3. If the cache is empty (first-ever open), show a loading spinner
+ *     until the server responds.
+ *
+ * **Streaming strategy:**
+ *  - Sending a message calls POST /api/chat/start, then collects the
+ *    SSE event stream. Token events append to the last assistant
+ *    message. Stop button cancels the stream job.
+ *  - isStreaming is preserved across navigation because the ViewModel
+ *    is scoped to the NavBackStackEntry.
  */
 class ChatViewModel(
     private val sessionRepository: SessionRepository,
     private val chatStream: ChatStream
 ) : ViewModel() {
-
-    private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
-    val messages: StateFlow<List<ChatMessage>> = _messages.asStateFlow()
 
     private val _isStreaming = MutableStateFlow(false)
     val isStreaming: StateFlow<Boolean> = _isStreaming.asStateFlow()
@@ -32,56 +49,76 @@ class ChatViewModel(
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 
-    /** Total messages in cache for this session. */
+    /** True while fetching from server AND cache is empty. */
+    private val _isInitialLoading = MutableStateFlow(false)
+    val isInitialLoading: StateFlow<Boolean> = _isInitialLoading.asStateFlow()
+
+    /** Total cached messages for this session (for "Load more (N)" button). */
     private val _totalCached = MutableStateFlow(0)
     val totalCached: StateFlow<Int> = _totalCached.asStateFlow()
+
+    private var streamJob: Job? = null
+    private var cacheObserverJob: Job? = null
+    private var loadedSessionId: String? = null
+
+    // Backing flow for messages — set by the Room cache observer
+    private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
+    val messages: StateFlow<List<ChatMessage>> = _messages.asStateFlow()
 
     /** How many older messages are available to load (total - visible). */
     val remainingToLoad: StateFlow<Int> = MutableStateFlow(0)
 
-    private var streamJob: Job? = null
-    private var loadedSessionId: String? = null
-
     /**
-     * Load the last [INITIAL_MESSAGE_COUNT] messages for [sessionId] from
-     * the local Room cache. Uses Flow.first() so it's a one-shot read.
-     * Also fetches fresh data from the server to update the cache.
+     * Called when the chat screen appears. Does two things:
+     *
+     *  1. Starts observing the Room cache as a Flow — messages appear
+     *     INSTANTLY from the local database (no network wait).
+     *  2. Kicks off a background server fetch to update the cache.
+     *     The Flow observer picks up the new data automatically.
+     *
+     * This is the local-first pattern used by Claude, Gemini, WhatsApp.
      */
     fun loadMessages(sessionId: String) {
-        if (loadedSessionId == sessionId && _messages.value.isNotEmpty()) {
-            return
-        }
+        if (loadedSessionId == sessionId) return
         loadedSessionId = sessionId
+
+        // Cancel any previous cache observer (e.g. from a different session)
+        cacheObserverJob?.cancel()
+
+        // 1. Observe Room cache as a Flow — instant updates when cache changes
+        cacheObserverJob = sessionRepository.getMessages(sessionId, INITIAL_MESSAGE_COUNT)
+            .onEach { entities ->
+                val chatMessages = entities.map { it.toChatMessage() }
+                _messages.value = chatMessages
+                updateRemainingCount(sessionId)
+            }
+            .launchIn(viewModelScope)
+
+        // 2. Background fetch from server — don't block the UI
+        val cacheIsEmpty = _messages.value.isEmpty()
+        if (cacheIsEmpty) {
+            _isInitialLoading.value = true
+        }
 
         viewModelScope.launch {
             try {
-                // One-shot read from Room cache
-                val cached = sessionRepository.getMessages(sessionId, INITIAL_MESSAGE_COUNT).first()
-                _messages.value = cached.map { it.toChatMessage() }
-                updateRemainingCount(sessionId)
-
-                // Fetch fresh data from server to update the cache
                 val result = sessionRepository.loadSession(sessionId, msgLimit = INITIAL_MESSAGE_COUNT)
-                result.onSuccess {
-                    if (!_isStreaming.value) {
-                        val fresh = sessionRepository.getMessages(sessionId, INITIAL_MESSAGE_COUNT).first()
-                        _messages.value = fresh.map { it.toChatMessage() }
-                        updateRemainingCount(sessionId)
-                    }
-                }.onFailure { e ->
+                result.onFailure { e ->
+                    // Only show error if we have no cached messages to show
                     if (_messages.value.isEmpty()) {
                         _error.value = e.message ?: "Failed to load messages"
                     }
                 }
             } catch (e: Exception) {
-                _error.value = friendlyError(e)
+                if (_messages.value.isEmpty()) {
+                    _error.value = friendlyError(e)
+                }
+            } finally {
+                _isInitialLoading.value = false
             }
         }
     }
 
-    /**
-     * Load older messages (before the oldest currently visible message).
-     */
     fun loadMoreMessages(sessionId: String) {
         val oldestTimestamp = _messages.value.firstOrNull()?.timestamp ?: return
 
@@ -96,9 +133,6 @@ class ChatViewModel(
                     val olderMessages = older.reversed().map { it.toChatMessage() }
                     _messages.value = olderMessages + _messages.value
                     updateRemainingCount(sessionId)
-                } else {
-                    // No more messages to load
-                    updateRemainingCount(sessionId)
                 }
             } catch (e: Exception) {
                 _error.value = friendlyError(e)
@@ -106,9 +140,6 @@ class ChatViewModel(
         }
     }
 
-    /**
-     * Update [remainingToLoad] based on total cached vs currently visible.
-     */
     private suspend fun updateRemainingCount(sessionId: String) {
         val total = sessionRepository.getMessageCount(sessionId)
         _totalCached.value = total

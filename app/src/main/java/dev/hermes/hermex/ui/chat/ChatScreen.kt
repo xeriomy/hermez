@@ -72,6 +72,7 @@ fun ChatScreen(
     val isStreaming by chatViewModel.isStreaming.collectAsStateWithLifecycle()
     val error by chatViewModel.error.collectAsStateWithLifecycle()
     val remainingToLoad by chatViewModel.remainingToLoad.collectAsStateWithLifecycle()
+    val isInitialLoading by chatViewModel.isInitialLoading.collectAsStateWithLifecycle()
 
     var composerText by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
@@ -108,8 +109,21 @@ fun ChatScreen(
             contentPadding = PaddingValues(vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            // Initial loading spinner — shown only on first-ever load when
+            // cache is empty AND we're fetching from server.
+            if (isInitialLoading && messages.isEmpty()) {
+                item {
+                    Box(
+                        modifier = Modifier.fillMaxWidth().padding(32.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator()
+                    }
+                }
+            }
+
             // "Load more" button — only shown if there are older messages to load
-            if (remainingToLoad > 0) {
+            if (remainingToLoad > 0 && !isInitialLoading) {
                 item {
                     Box(
                         modifier = Modifier.fillMaxWidth(),
