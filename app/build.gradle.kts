@@ -113,6 +113,9 @@ dependencies {
     // Markdown rendering (assistant messages with code blocks, lists, etc.)
     implementation("com.mikepenz:multiplatform-markdown-renderer-m3:0.28.0")
 
+    // JSON parsing (for normalizing raw JSON in assistant messages)
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
+
     // Testing
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.1.5")

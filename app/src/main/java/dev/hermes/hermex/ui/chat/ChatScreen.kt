@@ -224,21 +224,13 @@ fun MessageBubble(message: ChatMessage) {
             )
         ) {
             if (isUser) {
-                // User messages: plain text (usually short, no markdown needed)
                 Text(
                     text = message.content,
                     modifier = Modifier.padding(16.dp),
                     color = MaterialTheme.colorScheme.onPrimaryContainer
                 )
             } else {
-                // Assistant messages: render markdown (code blocks, lists,
-                // bold, headers, etc.)
-                // Normalize content: some older cached messages have literal
-                // \n strings instead of actual newlines. Replace them so
-                // markdown renders correctly.
-                val normalizedContent = message.content
-                    .replace("\\n", "\n")
-                    .replace("\\r", "")
+                val normalizedContent = normalizeMessageContent(message.content)
                 Markdown(
                     content = normalizedContent,
                     modifier = Modifier.padding(16.dp)
@@ -246,6 +238,42 @@ fun MessageBubble(message: ChatMessage) {
             }
         }
     }
+}
+
+/**
+ * Normalize message content for markdown rendering:
+ *  1. Replace literal \n strings with actual newlines (old cached data)
+ *  2. Detect raw JSON (starts with { or [ and is valid JSON) and wrap
+ *     it in a ```json code block so it renders with syntax highlighting
+ *     and horizontal scroll instead of being cut off at the right edge.
+ */
+fun normalizeMessageContent(content: String): String {
+    // Step 1: unescape literal \n and \r
+    var normalized = content
+        .replace("\\r\\n", "\n")
+        .replace("\\n", "\n")
+        .replace("\\r", "")
+        .replace("\\t", "    ")
+
+    // Step 2: if the entire content looks like raw JSON, wrap it in a
+    // code block so it renders properly with horizontal scroll.
+    val trimmed = normalized.trim()
+    if ((trimmed.startsWith("{") && trimmed.endsWith("}")) ||
+        (trimmed.startsWith("[") && trimmed.endsWith("]"))) {
+        normalized = try {
+            val json = kotlinx.serialization.json.Json { prettyPrint = true }
+            val parsed = json.parseToJsonElement(trimmed)
+            val pretty = json.encodeToString(
+                kotlinx.serialization.json.JsonElement.serializer(),
+                parsed
+            )
+            "```json\n$pretty\n```"
+        } catch (_: Exception) {
+            "```\n$trimmed\n```"
+        }
+    }
+
+    return normalized
 }
 
 data class ChatMessage(
