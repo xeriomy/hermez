@@ -178,35 +178,43 @@ class SessionRepository(app: Application) : AndroidViewModel(app) {
     }
 
     suspend fun setPinned(sessionId: String, pinned: Boolean): Result<Unit> = try {
-        val client = client() ?: return Result.failure(Exception("Not connected to a server. Log in first."))
+        // Optimistic update: update Room FIRST so the UI reflects the change
+        // immediately. Pinning is local-only state (the server may not support
+        // it), so we don't roll back if the server call fails.
+        db.sessionDao().setPinned(sessionId, pinned)
+
+        val client = client() ?: return Result.success(Unit)
         val response = client.post(ApiEndpoint.SessionPin.path) {
             contentType(ContentType.Application.Json)
             setBody(PinRequest(sessionId, pinned))
         }
         if (response.status.isSuccess()) {
-            db.sessionDao().setPinned(sessionId, pinned)
             Result.success(Unit)
         } else {
-            Result.failure(Exception("Failed to pin: ${response.status}"))
+            // Server failed but local state is already updated — don't punish
+            // the user for a server-side issue
+            Result.success(Unit)
         }
     } catch (e: Exception) {
-        Result.failure(e)
+        Result.success(Unit) // local update already happened
     }
 
     suspend fun setArchived(sessionId: String, archived: Boolean): Result<Unit> = try {
-        val client = client() ?: return Result.failure(Exception("Not connected to a server. Log in first."))
+        // Optimistic update: update Room FIRST. Archiving is local-only state.
+        db.sessionDao().setArchived(sessionId, archived)
+
+        val client = client() ?: return Result.success(Unit)
         val response = client.post(ApiEndpoint.SessionArchive.path) {
             contentType(ContentType.Application.Json)
             setBody(ArchiveRequest(sessionId, archived))
         }
         if (response.status.isSuccess()) {
-            db.sessionDao().setArchived(sessionId, archived)
             Result.success(Unit)
         } else {
-            Result.failure(Exception("Failed to archive: ${response.status}"))
+            Result.success(Unit)
         }
     } catch (e: Exception) {
-        Result.failure(e)
+        Result.success(Unit)
     }
 
     suspend fun moveSession(sessionId: String, projectId: String?): Result<Unit> = try {
