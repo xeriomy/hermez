@@ -49,7 +49,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import dev.hermes.core.auth.AuthRepository
 import dev.hermes.core.data.SessionRepository
 import dev.hermes.core.data.local.SessionEntity
 import kotlinx.coroutines.launch
@@ -57,7 +56,6 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SessionListScreen(
-    authRepository: AuthRepository,
     sessionRepository: SessionRepository,
     onSessionClick: (String) -> Unit = {},
     onShowArchived: () -> Unit = {},

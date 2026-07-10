@@ -24,6 +24,9 @@ interface SessionDao {
     @Query("SELECT * FROM sessions WHERE sessionId = :sessionId")
     suspend fun getSession(sessionId: String): SessionEntity?
 
+    @Query("SELECT * FROM sessions")
+    suspend fun getAllSessionsList(): List<SessionEntity>
+
     @Query("SELECT * FROM sessions WHERE projectId = :projectId ORDER BY updatedAt DESC")
     fun getSessionsByProject(projectId: String): Flow<List<SessionEntity>>
 

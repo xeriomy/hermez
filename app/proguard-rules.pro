@@ -66,6 +66,11 @@
 -dontwarn com.google.crypto.tink.**
 -dontwarn com.google.errorprone.annotations.**
 
+# --- Markdown renderer (Mike Penz) ------------------------------------------
+# The markdown renderer uses reflection to load extended components.
+-keep class com.mikepenz.markdown.** { *; }
+-dontwarn com.mikepenz.markdown.**
+
 # --- R8 optimizations -------------------------------------------------------
 # Re-package classes to shrink method count and hinder reverse engineering.
 # Disable for now to avoid breaking reflection-heavy libs; enable once

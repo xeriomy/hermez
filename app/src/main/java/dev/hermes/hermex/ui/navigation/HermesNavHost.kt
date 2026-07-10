@@ -49,7 +49,6 @@ fun HermesNavHost(
 
         composable(Routes.SESSIONS) {
             SessionListScreen(
-                authRepository = authRepository,
                 sessionRepository = sessionRepository,
                 onSessionClick = { sessionId ->
                     navController.navigate(Routes.chat(sessionId))

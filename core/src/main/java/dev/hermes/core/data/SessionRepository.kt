@@ -78,7 +78,20 @@ class SessionRepository(app: Application) : AndroidViewModel(app) {
             })
         }
         val sessions = response.body<SessionsResponse>().sessions
-        val entities = sessions.map { it.toEntity() }
+
+        // Before inserting, read the existing archived/pinned state for each
+        // session so we don't overwrite local-only state. The server may not
+        // include the 'archived' or 'pinned' fields in the sessions list
+        // response (or may report them differently), so REPLACE would wipe
+        // any sessions the user archived locally.
+        val existingSessions = db.sessionDao().getAllSessionsList().associateBy { it.sessionId }
+        val entities = sessions.map { dto ->
+            val existing = existingSessions[dto.session_id]
+            dto.toEntity().copy(
+                archived = existing?.archived ?: dto.archived,
+                pinned = existing?.pinned ?: dto.pinned
+            )
+        }
         db.sessionDao().insertSessions(entities)
         entities
     }
@@ -95,7 +108,12 @@ class SessionRepository(app: Application) : AndroidViewModel(app) {
             })
         }
         val session = response.body<SessionDetailResponse>().session ?: throw Exception("Session not found")
-        val entity = session.toEntity()
+        // Preserve local archived/pinned state (same reason as refreshSessions)
+        val existing = db.sessionDao().getSession(sessionId)
+        val entity = session.toEntity().copy(
+            archived = existing?.archived ?: session.archived,
+            pinned = existing?.pinned ?: session.pinned
+        )
         db.sessionDao().insertSession(entity)
 
         // Clear existing messages for this session before re-inserting.
