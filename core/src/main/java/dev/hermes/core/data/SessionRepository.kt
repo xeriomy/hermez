@@ -48,6 +48,13 @@ class SessionRepository(app: Application) : AndroidViewModel(app) {
     suspend fun getMessagesBefore(sessionId: String, beforeTimestamp: Long, limit: Int = 20): List<MessageEntity> =
         db.messageDao().getMessagesBefore(sessionId, beforeTimestamp, limit)
 
+    /**
+     * Get the total number of cached messages for [sessionId].
+     * Used to calculate how many older messages are available to load.
+     */
+    suspend fun getMessageCount(sessionId: String): Int =
+        db.messageDao().getMessageCount(sessionId)
+
     suspend fun refreshSessions(): Result<List<SessionEntity>> = runCatching {
         val client = client() ?: throw Exception("Not connected to a server. Log in first.")
         val response = client.get(ApiEndpoint.Sessions.path)
@@ -80,6 +87,11 @@ class SessionRepository(app: Application) : AndroidViewModel(app) {
         val session = response.body<SessionDetailResponse>().session ?: throw Exception("Session not found")
         val entity = session.toEntity()
         db.sessionDao().insertSession(entity)
+
+        // Clear existing messages for this session before re-inserting.
+        // Without this, re-opening the chat re-inserts the same messages
+        // with new auto-generated primary keys, causing duplicates.
+        db.messageDao().deleteMessagesForSession(sessionId)
         session.messages?.forEach { msg ->
             db.messageDao().insertMessage(msg.toEntity(sessionId))
         }
@@ -270,10 +282,13 @@ class SessionRepository(app: Application) : AndroidViewModel(app) {
         val timestamp: Double? = null,
         val model: String? = null,
         val provider: String? = null,
-        val tool_calls: String? = null,
+        // tool_calls can be a JSON array of objects OR a string. Use
+        // JsonElement to accept either, then convert to string for Room.
+        val tool_calls: kotlinx.serialization.json.JsonElement? = null,
         val reasoning: String? = null,
-        val attachments: String? = null,
-        val metadata: String? = null
+        // attachments can also be a JSON array. Same treatment.
+        val attachments: kotlinx.serialization.json.JsonElement? = null,
+        val metadata: kotlinx.serialization.json.JsonElement? = null
     ) {
         fun toEntity(sessionId: String): MessageEntity = MessageEntity(
             sessionId = sessionId,
@@ -283,10 +298,10 @@ class SessionRepository(app: Application) : AndroidViewModel(app) {
             timestamp = (timestamp ?: 0.0).toLong(),
             model = model,
             provider = provider,
-            toolCalls = tool_calls,
+            toolCalls = tool_calls?.toString(),
             reasoning = reasoning,
-            attachments = attachments,
-            metadata = metadata
+            attachments = attachments?.toString(),
+            metadata = metadata?.toString()
         )
     }
 

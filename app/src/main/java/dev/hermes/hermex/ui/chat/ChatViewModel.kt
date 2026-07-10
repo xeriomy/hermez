@@ -17,18 +17,6 @@ import kotlinx.coroutines.launch
  * error state. Uses the [SessionRepository] and [ChatStream] passed from
  * [dev.hermes.hermex.ui.HermexApp] so all screens share the same
  * Activity-scoped instances (and the same auth cookie).
- *
- * Message loading strategy:
- *  - On entry, loads the last [INITIAL_MESSAGE_COUNT] messages from the
- *    local Room cache (one-shot, not a continuous Flow collection).
- *  - Also fetches fresh data from the server via loadSession() to update
- *    the cache, then reloads from cache.
- *  - "Load more" button fetches older messages via getMessagesBefore().
- *
- * Streaming state survives screen navigation because the ViewModel is
- * scoped to the NavBackStackEntry — but we explicitly preserve
- * [isStreaming] and [messages] so reopening the chat shows the current
- * state instead of a blank screen.
  */
 class ChatViewModel(
     private val sessionRepository: SessionRepository,
@@ -44,25 +32,22 @@ class ChatViewModel(
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 
-    private val _totalCount = MutableStateFlow(0)
-    val totalCount: StateFlow<Int> = _totalCount.asStateFlow()
+    /** Total messages in cache for this session. */
+    private val _totalCached = MutableStateFlow(0)
+    val totalCached: StateFlow<Int> = _totalCached.asStateFlow()
 
-    private val _visibleCount = MutableStateFlow(0)
-    val visibleCount: StateFlow<Int> = _visibleCount.asStateFlow()
+    /** How many older messages are available to load (total - visible). */
+    val remainingToLoad: StateFlow<Int> = MutableStateFlow(0)
 
     private var streamJob: Job? = null
     private var loadedSessionId: String? = null
 
     /**
      * Load the last [INITIAL_MESSAGE_COUNT] messages for [sessionId] from
-     * the local Room cache. Uses Flow.first() so it's a one-shot read —
-     * we don't collect forever (which caused duplicate collectors on
-     * screen reopen).
-     *
-     * Also fetches fresh messages from the server to update the cache.
+     * the local Room cache. Uses Flow.first() so it's a one-shot read.
+     * Also fetches fresh data from the server to update the cache.
      */
     fun loadMessages(sessionId: String) {
-        // Don't reload if we already have messages for this session
         if (loadedSessionId == sessionId && _messages.value.isNotEmpty()) {
             return
         }
@@ -70,23 +55,20 @@ class ChatViewModel(
 
         viewModelScope.launch {
             try {
-                // One-shot read from Room cache — take only the first emission
+                // One-shot read from Room cache
                 val cached = sessionRepository.getMessages(sessionId, INITIAL_MESSAGE_COUNT).first()
                 _messages.value = cached.map { it.toChatMessage() }
-                _visibleCount.value = cached.size
+                updateRemainingCount(sessionId)
 
                 // Fetch fresh data from server to update the cache
                 val result = sessionRepository.loadSession(sessionId, msgLimit = INITIAL_MESSAGE_COUNT)
                 result.onSuccess {
-                    // Reload from cache after server fetch — only if we're not
-                    // currently streaming (streaming adds its own messages)
                     if (!_isStreaming.value) {
                         val fresh = sessionRepository.getMessages(sessionId, INITIAL_MESSAGE_COUNT).first()
                         _messages.value = fresh.map { it.toChatMessage() }
-                        _visibleCount.value = fresh.size
+                        updateRemainingCount(sessionId)
                     }
                 }.onFailure { e ->
-                    // Don't overwrite messages if we already have cached ones
                     if (_messages.value.isEmpty()) {
                         _error.value = e.message ?: "Failed to load messages"
                     }
@@ -99,7 +81,6 @@ class ChatViewModel(
 
     /**
      * Load older messages (before the oldest currently visible message).
-     * Called when the user taps "Load more".
      */
     fun loadMoreMessages(sessionId: String) {
         val oldestTimestamp = _messages.value.firstOrNull()?.timestamp ?: return
@@ -112,10 +93,12 @@ class ChatViewModel(
                     LOAD_MORE_COUNT
                 )
                 if (older.isNotEmpty()) {
-                    val olderMessages = older.map { it.toChatMessage() }
-                    // Prepend older messages to the list (they have earlier timestamps)
+                    val olderMessages = older.reversed().map { it.toChatMessage() }
                     _messages.value = olderMessages + _messages.value
-                    _visibleCount.value = _messages.value.size
+                    updateRemainingCount(sessionId)
+                } else {
+                    // No more messages to load
+                    updateRemainingCount(sessionId)
                 }
             } catch (e: Exception) {
                 _error.value = friendlyError(e)
@@ -124,16 +107,17 @@ class ChatViewModel(
     }
 
     /**
-     * Send [text] to the server as a new message in [sessionId], then
-     * stream the assistant's response token-by-token into [_messages].
-     *
-     * Handles 409 Conflict (stream already active) by showing a friendly
-     * error instead of the raw server message.
+     * Update [remainingToLoad] based on total cached vs currently visible.
      */
+    private suspend fun updateRemainingCount(sessionId: String) {
+        val total = sessionRepository.getMessageCount(sessionId)
+        _totalCached.value = total
+        (remainingToLoad as MutableStateFlow).value = (total - _messages.value.size).coerceAtLeast(0)
+    }
+
     fun sendMessage(text: String, sessionId: String) {
         if (text.isBlank() || _isStreaming.value) return
 
-        // Optimistically add the user's message to the list immediately
         val userMessage = ChatMessage(
             messageId = "local_user_${System.currentTimeMillis()}",
             role = "user",
@@ -171,7 +155,6 @@ class ChatViewModel(
                 if (start.isFailure) {
                     val exception = start.exceptionOrNull()
                     val errorMsg = exception?.message ?: "Start failed"
-                    // 409 Conflict = there's already an active stream on this session
                     _error.value = if (errorMsg.contains("409") || errorMsg.contains("Conflict")) {
                         "A response is already streaming. Wait for it to finish or tap Stop first."
                     } else {
@@ -186,12 +169,9 @@ class ChatViewModel(
                     return@launch
                 }
 
-                // Collect SSE events until the stream completes
                 chatStream.streamEvents(streamId).collect { event ->
                     when (event) {
                         is ChatStream.StreamEvent.Token -> {
-                            // Append the token to the last assistant message,
-                            // or create a new one if there isn't one yet
                             val existing = _messages.value
                             val last = existing.lastOrNull()
                             val updated = if (last != null && last.role == "assistant") {
@@ -233,10 +213,7 @@ class ChatViewModel(
     )
 
     companion object {
-        /** Number of messages to load initially (last N from cache). */
         private const val INITIAL_MESSAGE_COUNT = 20
-
-        /** Number of older messages to load when "Load more" is tapped. */
         private const val LOAD_MORE_COUNT = 20
     }
 }

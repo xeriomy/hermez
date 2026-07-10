@@ -21,6 +21,9 @@ interface MessageDao {
     @Query("SELECT * FROM messages WHERE sessionId = :sessionId AND timestamp < :beforeTimestamp ORDER BY timestamp DESC LIMIT :limit")
     suspend fun getMessagesBefore(sessionId: String, beforeTimestamp: Long, limit: Int): List<MessageEntity>
 
+    @Query("SELECT COUNT(*) FROM messages WHERE sessionId = :sessionId")
+    suspend fun getMessageCount(sessionId: String): Int
+
     @Query("DELETE FROM messages WHERE sessionId = :sessionId")
     suspend fun deleteMessagesForSession(sessionId: String)
 

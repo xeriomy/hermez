@@ -49,15 +49,6 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import dev.hermes.core.data.SessionRepository
 import dev.hermes.core.network.ChatStream
 
-/**
- * The chat screen for a specific [sessionId]. Shows the message history
- * (loaded from the local Room cache) and a composer for sending new
- * messages. Streaming responses from the assistant appear token-by-token
- * in real time.
- *
- * [sessionRepository] and [serverUrl] are passed from HermexApp so all
- * screens share the same Activity-scoped instances.
- */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen(
@@ -66,9 +57,6 @@ fun ChatScreen(
     serverUrl: String,
     onBack: () -> Unit = {}
 ) {
-    // Create a ChatViewModel scoped to THIS NavBackStackEntry (so each
-    // chat session has its own message list) but with shared deps from
-    // the Activity.
     val chatViewModel: ChatViewModel = viewModel(
         factory = viewModelFactory {
             initializer {
@@ -83,17 +71,15 @@ fun ChatScreen(
     val messages by chatViewModel.messages.collectAsStateWithLifecycle()
     val isStreaming by chatViewModel.isStreaming.collectAsStateWithLifecycle()
     val error by chatViewModel.error.collectAsStateWithLifecycle()
+    val remainingToLoad by chatViewModel.remainingToLoad.collectAsStateWithLifecycle()
 
     var composerText by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
 
-    // Load existing messages for this session when the screen first appears.
-    // ChatViewModel.loadMessages() guards against reloading if already loaded.
     LaunchedEffect(sessionId) {
         chatViewModel.loadMessages(sessionId)
     }
 
-    // Auto-scroll to the bottom when new messages arrive or streaming progresses
     LaunchedEffect(messages.size, isStreaming) {
         if (messages.isNotEmpty()) {
             listState.animateScrollToItem(messages.size - 1)
@@ -102,18 +88,7 @@ fun ChatScreen(
 
     Column(modifier = Modifier.fillMaxSize()) {
         TopAppBar(
-            title = {
-                Column {
-                    Text("Chat")
-                    if (messages.isNotEmpty()) {
-                        Text(
-                            text = "${messages.size} messages",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            },
+            title = { Text("Chat") },
             navigationIcon = {
                 IconButton(onClick = onBack) {
                     Icon(
@@ -133,15 +108,15 @@ fun ChatScreen(
             contentPadding = PaddingValues(vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // "Load more" button at the top (only if we have messages)
-            if (messages.isNotEmpty()) {
+            // "Load more" button — only shown if there are older messages to load
+            if (remainingToLoad > 0) {
                 item {
                     Box(
                         modifier = Modifier.fillMaxWidth(),
                         contentAlignment = Alignment.Center
                     ) {
                         TextButton(onClick = { chatViewModel.loadMoreMessages(sessionId) }) {
-                            Text("Load more messages")
+                            Text("Load more ($remainingToLoad)")
                         }
                     }
                 }
@@ -151,7 +126,6 @@ fun ChatScreen(
                 MessageBubble(message = msg)
             }
 
-            // Streaming indicator at the bottom
             if (isStreaming) {
                 item {
                     Box(
