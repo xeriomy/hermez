@@ -110,6 +110,9 @@ dependencies {
     // Image/media
     implementation("io.coil-kt:coil-compose:2.6.0")
 
+    // Markdown rendering (assistant messages with code blocks, lists, etc.)
+    implementation("com.mikepenz:multiplatform-markdown-renderer-m3:0.28.0")
+
     // Testing
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.1.5")

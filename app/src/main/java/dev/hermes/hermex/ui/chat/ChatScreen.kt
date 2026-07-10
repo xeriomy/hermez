@@ -46,6 +46,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import com.mikepenz.markdown.m3.Markdown
 import dev.hermes.core.data.SessionRepository
 import dev.hermes.core.network.ChatStream
 
@@ -222,12 +223,21 @@ fun MessageBubble(message: ChatMessage) {
                 else MaterialTheme.colorScheme.surfaceContainerHighest
             )
         ) {
-            Text(
-                text = message.content,
-                modifier = Modifier.padding(16.dp),
-                color = if (isUser) MaterialTheme.colorScheme.onPrimaryContainer
-                else MaterialTheme.colorScheme.onSurface
-            )
+            if (isUser) {
+                // User messages: plain text (usually short, no markdown needed)
+                Text(
+                    text = message.content,
+                    modifier = Modifier.padding(16.dp),
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+            } else {
+                // Assistant messages: render markdown (code blocks, lists,
+                // bold, headers, etc.)
+                Markdown(
+                    content = message.content,
+                    modifier = Modifier.padding(16.dp)
+                )
+            }
         }
     }
 }
