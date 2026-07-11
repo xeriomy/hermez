@@ -66,10 +66,13 @@ fun AppDrawer(
     val activeSessions by sessionRepository.getActiveSessions()
         .collectAsStateWithLifecycle(initialValue = emptyList())
 
-    // Wrap the entire drawer in a Surface with a fixed width so it
-    // doesn't bleed through to the main content when closed.
+    // Constrain drawer width to 320dp — ModalNavigationDrawer doesn't
+    // auto-limit width, and without this the Surface fills all available
+    // space, making the drawer appear at 40-100% even when "closed".
     Surface(
-        modifier = Modifier.fillMaxHeight(),
+        modifier = Modifier
+            .fillMaxHeight()
+            .width(320.dp),
         color = MaterialTheme.colorScheme.surface
     ) {
         Column(
