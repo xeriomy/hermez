@@ -233,6 +233,76 @@ class SessionRepository(app: Application) : AndroidViewModel(app) {
         Result.failure(e)
     }
 
+    /**
+     * Upload a file to the server via POST /api/upload (multipart/form-data).
+     * Returns the server path of the uploaded file, which can be passed
+     * to ChatStream.startChat() as a `files` entry.
+     *
+     * @param sessionId The session to attach the file to
+     * @param fileUri The content:// URI of the file to upload
+     * @return Result with the server file path on success
+     */
+    suspend fun uploadFile(sessionId: String, fileUri: String): Result<String> = try {
+        val client = client() ?: return Result.failure(Exception("Not connected to a server. Log in first."))
+
+        // Read file data from the content URI
+        val uri = android.net.Uri.parse(fileUri)
+        val inputStream = context.contentResolver.openInputStream(uri)
+            ?: return Result.failure(Exception("Could not open file"))
+        val fileData = inputStream.use { it.readBytes() }
+
+        // Get filename from the URI
+        val fileName = context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+            val nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+            if (nameIndex >= 0 && cursor.moveToFirst()) cursor.getString(nameIndex) else "file"
+        } ?: "file"
+
+        // Get MIME type
+        val mimeType = context.contentResolver.getType(uri) ?: "application/octet-stream"
+
+        // Build multipart form data
+        val boundary = "Boundary-${System.currentTimeMillis()}"
+        val response = client.post(ApiEndpoint.Upload.path) {
+            contentType(ContentType.MultiPart.FormData.withParameter("boundary", boundary))
+            setBody(buildMultipartBody(boundary, sessionId, fileName, fileData, mimeType))
+        }
+
+        if (response.status.isSuccess()) {
+            val body = response.body<UploadResponse>()
+            val path = body.path ?: body.filename ?: fileName
+            Result.success(path)
+        } else {
+            Result.failure(Exception("Upload failed: ${response.status}"))
+        }
+    } catch (e: Exception) {
+        Result.failure(e)
+    }
+
+    /**
+     * Build a multipart/form-data body as a ByteArray.
+     */
+    private fun buildMultipartBody(
+        boundary: String,
+        sessionId: String,
+        fileName: String,
+        fileData: ByteArray,
+        mimeType: String
+    ): ByteArray {
+        val sb = StringBuilder()
+        sb.append("--").append(boundary).append("\r\n")
+        sb.append("Content-Disposition: form-data; name=\"session_id\"\r\n\r\n")
+        sb.append(sessionId).append("\r\n")
+
+        sb.append("--").append(boundary).append("\r\n")
+        sb.append("Content-Disposition: form-data; name=\"file\"; filename=\"").append(fileName).append("\"\r\n")
+        sb.append("Content-Type: ").append(mimeType).append("\r\n\r\n")
+
+        val headerBytes = sb.toString().toByteArray(Charsets.UTF_8)
+        val footerBytes = "\r\n--$boundary--\r\n".toByteArray(Charsets.UTF_8)
+
+        return headerBytes + fileData + footerBytes
+    }
+
     // DTOs
     @Serializable
     private data class SessionsResponse(val sessions: List<SessionDto>)
@@ -362,4 +432,14 @@ class SessionRepository(app: Application) : AndroidViewModel(app) {
     private data class ArchiveRequest(val session_id: String, val archived: Boolean)
     @Serializable
     private data class MoveRequest(val session_id: String, val project_id: String?)
+
+    @Serializable
+    private data class UploadResponse(
+        val filename: String? = null,
+        val path: String? = null,
+        val size: Int? = null,
+        val mime: String? = null,
+        val is_image: Boolean? = null,
+        val error: String? = null
+    )
 }

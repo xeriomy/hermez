@@ -152,7 +152,8 @@ class ChatViewModel(
         model: String? = null,
         provider: String? = null,
         workspace: String? = null,
-        profile: String? = null
+        profile: String? = null,
+        attachments: List<String> = emptyList()
     ) {
         if (text.isBlank() || _isStreaming.value) return
 
@@ -170,8 +171,16 @@ class ChatViewModel(
             model = model,
             provider = provider,
             workspace = workspace,
-            profile = profile
+            profile = profile,
+            files = attachments.ifEmpty { null }
         )
+    }
+
+    /**
+     * Upload a file to the server. Returns the server file path on success.
+     */
+    suspend fun uploadAttachment(sessionId: String, fileUri: String): Result<String> {
+        return sessionRepository.uploadFile(sessionId, fileUri)
     }
 
     fun stopStreaming() {
@@ -186,7 +195,8 @@ class ChatViewModel(
         model: String? = null,
         provider: String? = null,
         workspace: String? = null,
-        profile: String? = null
+        profile: String? = null,
+        files: List<String>? = null
     ) {
         _isStreaming.value = true
         streamJob = viewModelScope.launch {
@@ -200,7 +210,7 @@ class ChatViewModel(
                         reasoning = null,
                         workspace = workspace,
                         profile = profile,
-                        files = null,
+                        files = files,
                         explicit_model_pick = model != null
                     )
                 )

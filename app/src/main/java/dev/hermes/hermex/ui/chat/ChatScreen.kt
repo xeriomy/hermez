@@ -8,24 +8,42 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Snackbar
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -35,9 +53,13 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -49,6 +71,7 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import com.mikepenz.markdown.m3.Markdown
 import dev.hermes.core.data.SessionRepository
 import dev.hermes.core.network.ChatStream
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -85,6 +108,39 @@ fun ChatScreen(
     var selectedModel by remember { mutableStateOf<dev.hermes.core.data.ModelOption?>(null) }
     var selectedWorkspace by remember { mutableStateOf<String?>(null) }
     var selectedProfile by remember { mutableStateOf<String?>(null) }
+
+    var showConfigSheet by remember { mutableStateOf(false) }
+    val snackbarHostState = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+
+    // Attachments — list of uploaded file paths (server paths)
+    var attachments by remember { mutableStateOf<List<AttachmentItem>>(emptyList()) }
+    var isUploading by remember { mutableStateOf(false) }
+
+    // File picker launcher
+    val filePickerLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.GetMultipleContents()
+    ) { uris ->
+        if (uris.isNotEmpty()) {
+            isUploading = true
+            scope.launch {
+                uris.forEach { uri ->
+                    val result = chatViewModel.uploadAttachment(sessionId, uri.toString())
+                    result.onSuccess { path ->
+                        val fileName = uri.lastPathSegment ?: path
+                        attachments = attachments + AttachmentItem(
+                            uri = uri.toString(),
+                            serverPath = path,
+                            fileName = fileName
+                        )
+                    }.onFailure { e ->
+                        snackbarHostState.showSnackbar("Upload failed: ${e.message}")
+                    }
+                }
+                isUploading = false
+            }
+        }
+    }
 
     // Load config when the screen appears
     LaunchedEffect(serverUrl) {
@@ -187,65 +243,209 @@ fun ChatScreen(
             enabled = !isStreaming
         )
 
-        // Composer
-        Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+        // Attachment preview chips (shown above composer when files are attached)
+        if (attachments.isNotEmpty()) {
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                attachments.forEach { attachment ->
+                    AssistChip(
+                        onClick = {
+                            attachments = attachments.filter { it != attachment }
+                        },
+                        label = { Text(attachment.fileName, fontSize = 11.sp, maxLines = 1) },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Default.AttachFile,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    )
+                }
+            }
+        }
+
+        // Composer — two-row layout (text on top, actions below) in a bordered surface
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .imePadding()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            shape = androidx.compose.foundation.shape.RoundedCornerShape(24.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            border = androidx.compose.foundation.BorderStroke(
+                1.dp,
+                MaterialTheme.colorScheme.outlineVariant
+            )
+        ) {
+            Column(modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp)) {
+                // Row 1: Text input
                 OutlinedTextField(
                     value = composerText,
                     onValueChange = { composerText = it },
-                    modifier = Modifier.fillMaxWidth().weight(1f),
-                    label = { Text("Message") },
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("Message…") },
                     singleLine = false,
                     maxLines = 5,
                     enabled = !isStreaming,
+                    shape = androidx.compose.foundation.shape.RoundedCornerShape(20.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Color.Transparent,
+                        unfocusedBorderColor = Color.Transparent,
+                        focusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent
+                    ),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text)
                 )
-                Spacer(modifier = Modifier.width(8.dp))
-                if (isStreaming) {
-                    IconButton(onClick = { chatViewModel.stopStreaming() }) {
-                        Icon(
-                            imageVector = Icons.Default.Stop,
-                            contentDescription = "Stop"
-                        )
-                    }
-                } else {
-                    IconButton(
-                        onClick = {
-                            val text = composerText.trim()
-                            if (text.isNotEmpty()) {
-                                composerText = ""
-                                chatViewModel.sendMessage(
-                                    text = text,
-                                    sessionId = sessionId,
-                                    model = selectedModel?.id,
-                                    provider = selectedModel?.provider,
-                                    workspace = selectedWorkspace,
-                                    profile = selectedProfile
+
+                // Row 2: Action bar
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    // + button — opens a menu with Upload file + Message options
+                    var plusMenuExpanded by remember { mutableStateOf(false) }
+                    Box {
+                        IconButton(
+                            onClick = { plusMenuExpanded = true },
+                            enabled = !isStreaming && !isUploading,
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            if (isUploading) {
+                                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Default.Add,
+                                    contentDescription = "More options",
+                                    modifier = Modifier.size(20.dp)
                                 )
                             }
-                        },
-                        enabled = composerText.trim().isNotEmpty()
-                    ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.Send,
-                            contentDescription = "Send"
+                        }
+                        DropdownMenu(
+                            expanded = plusMenuExpanded,
+                            onDismissRequest = { plusMenuExpanded = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Upload file") },
+                                onClick = {
+                                    plusMenuExpanded = false
+                                    filePickerLauncher.launch("*/*")
+                                },
+                                leadingIcon = {
+                                    Icon(Icons.Default.AttachFile, contentDescription = null)
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Message options") },
+                                onClick = {
+                                    plusMenuExpanded = false
+                                    showConfigSheet = true
+                                },
+                                leadingIcon = {
+                                    Icon(Icons.Default.Tune, contentDescription = null)
+                                }
+                            )
+                        }
+                    }
+
+                    // Model chip
+                    var modelMenuExpanded by remember { mutableStateOf(false) }
+                    Box {
+                        AssistChip(
+                            onClick = { if (!isStreaming) modelMenuExpanded = true },
+                            label = {
+                                Text(
+                                    text = selectedModel?.name ?: "Default",
+                                    fontSize = 11.sp,
+                                    maxLines = 1
+                                )
+                            },
+                            enabled = !isStreaming
                         )
+                        DropdownMenu(
+                            expanded = modelMenuExpanded,
+                            onDismissRequest = { modelMenuExpanded = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Default") },
+                                onClick = {
+                                    selectedModel = null
+                                    modelMenuExpanded = false
+                                }
+                            )
+                            models.forEach { model ->
+                                DropdownMenuItem(
+                                    text = { Text(model.toString()) },
+                                    onClick = {
+                                        selectedModel = model
+                                        modelMenuExpanded = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.weight(1f))
+
+                    // Send / Stop
+                    if (isStreaming) {
+                        IconButton(
+                            onClick = { chatViewModel.stopStreaming() },
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Stop,
+                                contentDescription = "Stop",
+                                modifier = Modifier.size(20.dp),
+                                tint = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    } else {
+                        IconButton(
+                            onClick = {
+                                val text = composerText.trim()
+                                if (text.isNotEmpty()) {
+                                    composerText = ""
+                                    val filePaths = attachments.map { it.serverPath }
+                                    attachments = emptyList()
+                                    chatViewModel.sendMessage(
+                                        text = text,
+                                        sessionId = sessionId,
+                                        model = selectedModel?.id,
+                                        provider = selectedModel?.provider,
+                                        workspace = selectedWorkspace,
+                                        profile = selectedProfile,
+                                        attachments = filePaths
+                                    )
+                                }
+                            },
+                            enabled = composerText.trim().isNotEmpty(),
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.Send,
+                                contentDescription = "Send",
+                                modifier = Modifier.size(20.dp),
+                                tint = if (composerText.trim().isNotEmpty())
+                                    MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 }
             }
-            error?.let {
-                Text(
-                    text = it,
-                    color = MaterialTheme.colorScheme.error,
-                    fontSize = 12.sp,
-                    style = androidx.compose.ui.text.TextStyle(textAlign = TextAlign.Start)
-                )
-            }
+        }
+
+        SnackbarHost(hostState = snackbarHostState) { data ->
+            Snackbar(snackbarData = data)
         }
     }
+
+    // Config bottom sheet (+ button → Message options)
 }
 
 @Composable
@@ -474,3 +674,9 @@ fun ConfigPickerRow(
         }
     }
 }
+
+data class AttachmentItem(
+    val uri: String,
+    val serverPath: String,
+    val fileName: String
+)
