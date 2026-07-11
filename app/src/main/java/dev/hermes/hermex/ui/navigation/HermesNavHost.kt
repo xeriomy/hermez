@@ -51,7 +51,8 @@ fun HermesNavHost(
     sessionRepository: SessionRepository,
     configRepository: ConfigRepository,
     workspaceRepository: WorkspaceRepository,
-    serverUrl: String
+    serverUrl: String,
+    onOpenDrawer: () -> Unit
 ) {
     NavHost(
         navController = navController,
@@ -72,7 +73,8 @@ fun HermesNavHost(
                 },
                 onShowSettings = {
                     navController.navigate(Routes.SETTINGS)
-                }
+                },
+                onOpenDrawer = onOpenDrawer
             )
         }
 
@@ -107,7 +109,8 @@ fun HermesNavHost(
                 configRepository = configRepository,
                 serverUrl = serverUrl,
                 onBack = { navController.popBackStack() },
-                onShowFiles = { navController.navigate(Routes.files(sessionId)) }
+                onShowFiles = { navController.navigate(Routes.files(sessionId)) },
+                onOpenDrawer = onOpenDrawer
             )
         }
 

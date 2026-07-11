@@ -2,11 +2,14 @@ package dev.hermes.hermex.ui
 
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Surface
+import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -16,8 +19,10 @@ import dev.hermes.core.auth.AuthState
 import dev.hermes.core.data.ConfigRepository
 import dev.hermes.core.data.SessionRepository
 import dev.hermes.core.data.WorkspaceRepository
+import dev.hermes.hermex.ui.drawer.AppDrawer
 import dev.hermes.hermex.ui.navigation.HermesNavHost
 import dev.hermes.hermex.ui.navigation.Routes
+import kotlinx.coroutines.launch
 
 @Composable
 fun HermexApp() {
@@ -36,6 +41,12 @@ fun HermexApp() {
             AuthState.LoggedOut -> Routes.LOGIN
         }
     }
+
+    val drawerState = rememberDrawerState(initialValue = androidx.compose.material3.DrawerValue.Closed)
+    val scope = rememberCoroutineScope()
+
+    fun openDrawer() { scope.launch { drawerState.open() } }
+    fun closeDrawer() { scope.launch { drawerState.close() } }
 
     LaunchedEffect(authState) {
         when (authState) {
@@ -57,18 +68,60 @@ fun HermexApp() {
         }
     }
 
-    Surface(
-        modifier = Modifier.fillMaxSize(),
-        color = MaterialTheme.colorScheme.background
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        drawerContent = {
+            AppDrawer(
+                authRepository = authRepository,
+                sessionRepository = sessionRepository,
+                onNewChat = {
+                    closeDrawer()
+                    // Navigate to sessions and trigger new chat
+                    navController.navigate(Routes.SESSIONS) {
+                        popUpTo(Routes.SESSIONS) { inclusive = true }
+                        launchSingleTop = true
+                    }
+                },
+                onShowChats = {
+                    closeDrawer()
+                    navController.navigate(Routes.SESSIONS) {
+                        popUpTo(Routes.SESSIONS) { inclusive = true }
+                        launchSingleTop = true
+                    }
+                },
+                onShowArchived = {
+                    closeDrawer()
+                    navController.navigate(Routes.ARCHIVED)
+                },
+                onShowSettings = {
+                    closeDrawer()
+                    navController.navigate(Routes.SETTINGS)
+                },
+                onSessionClick = { sessionId ->
+                    closeDrawer()
+                    navController.navigate(Routes.chat(sessionId))
+                },
+                onLogout = {
+                    closeDrawer()
+                    authRepository.logout()
+                }
+            )
+        }
     ) {
-        HermesNavHost(
-            navController = navController,
-            startDestination = startDestination,
-            authRepository = authRepository,
-            sessionRepository = sessionRepository,
-            configRepository = configRepository,
-            workspaceRepository = workspaceRepository,
-            serverUrl = serverUrl
-        )
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = MaterialTheme.colorScheme.background
+        ) {
+            HermesNavHost(
+                navController = navController,
+                startDestination = startDestination,
+                authRepository = authRepository,
+                sessionRepository = sessionRepository,
+                configRepository = configRepository,
+                workspaceRepository = workspaceRepository,
+                serverUrl = serverUrl,
+                onOpenDrawer = ::openDrawer
+            )
+        }
     }
 }

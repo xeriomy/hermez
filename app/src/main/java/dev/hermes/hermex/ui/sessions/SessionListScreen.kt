@@ -15,6 +15,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Refresh
@@ -59,7 +60,8 @@ fun SessionListScreen(
     sessionRepository: SessionRepository,
     onSessionClick: (String) -> Unit = {},
     onShowArchived: () -> Unit = {},
-    onShowSettings: () -> Unit = {}
+    onShowSettings: () -> Unit = {},
+    onOpenDrawer: () -> Unit = {}
 ) {
     val activeSessions by sessionRepository.getActiveSessions()
         .collectAsStateWithLifecycle(initialValue = emptyList())
@@ -154,6 +156,11 @@ fun SessionListScreen(
     Column(modifier = Modifier.fillMaxSize()) {
         TopAppBar(
             title = { Text("Sessions") },
+            navigationIcon = {
+                IconButton(onClick = onOpenDrawer) {
+                    Icon(Icons.Default.Menu, contentDescription = "Menu")
+                }
+            },
             actions = {
                 IconButton(onClick = { doRefresh() }, enabled = !isRefreshing) {
                     if (isRefreshing) {
@@ -168,12 +175,6 @@ fun SessionListScreen(
                     } else {
                         Icon(Icons.Default.Add, contentDescription = "New session")
                     }
-                }
-                IconButton(onClick = onShowArchived) {
-                    Icon(Icons.Default.Archive, contentDescription = "Archived sessions")
-                }
-                IconButton(onClick = onShowSettings) {
-                    Icon(Icons.Default.Settings, contentDescription = "Settings")
                 }
             },
             colors = TopAppBarDefaults.topAppBarColors(
