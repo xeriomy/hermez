@@ -25,6 +25,7 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.AssistChip
@@ -80,7 +81,8 @@ fun ChatScreen(
     sessionRepository: SessionRepository,
     configRepository: dev.hermes.core.data.ConfigRepository,
     serverUrl: String,
-    onBack: () -> Unit = {}
+    onBack: () -> Unit = {},
+    onShowFiles: () -> Unit = {}
 ) {
     val chatViewModel: ChatViewModel = viewModel(
         factory = viewModelFactory {
@@ -170,6 +172,14 @@ fun ChatScreen(
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                         contentDescription = "Back"
+                    )
+                }
+            },
+            actions = {
+                IconButton(onClick = onShowFiles) {
+                    Icon(
+                        imageVector = Icons.Default.Folder,
+                        contentDescription = "Browse files"
                     )
                 }
             },

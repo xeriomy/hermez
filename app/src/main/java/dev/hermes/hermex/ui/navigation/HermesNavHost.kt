@@ -9,11 +9,14 @@ import androidx.navigation.navArgument
 import dev.hermes.core.auth.AuthRepository
 import dev.hermes.core.data.ConfigRepository
 import dev.hermes.core.data.SessionRepository
+import dev.hermes.core.data.WorkspaceRepository
 import dev.hermes.hermex.ui.chat.ChatScreen
 import dev.hermes.hermex.ui.login.LoginScreen
 import dev.hermes.hermex.ui.sessions.ArchivedSessionsScreen
 import dev.hermes.hermex.ui.sessions.SessionListScreen
 import dev.hermes.hermex.ui.settings.SettingsScreen
+import dev.hermes.hermex.ui.workspace.FileBrowserScreen
+import dev.hermes.hermex.ui.workspace.FilePreviewScreen
 
 /**
  * Central place for all navigation routes.
@@ -25,8 +28,16 @@ object Routes {
     const val SETTINGS = "settings"
     const val CHAT = "chat/{sessionId}"
     const val CHAT_ARG = "sessionId"
+    const val FILES = "files/{sessionId}"
+    const val FILES_ARG = "sessionId"
+    const val FILE_PREVIEW = "file/{sessionId}/{filePath}"
+    const val FILE_PREVIEW_SESSION_ARG = "sessionId"
+    const val FILE_PREVIEW_PATH_ARG = "filePath"
 
     fun chat(sessionId: String): String = "chat/$sessionId"
+    fun files(sessionId: String): String = "files/$sessionId"
+    fun filePreview(sessionId: String, filePath: String): String =
+        "file/$sessionId/${filePath.replace("/", "::")}"  // encode slashes
 }
 
 /**
@@ -39,6 +50,7 @@ fun HermesNavHost(
     authRepository: AuthRepository,
     sessionRepository: SessionRepository,
     configRepository: ConfigRepository,
+    workspaceRepository: WorkspaceRepository,
     serverUrl: String
 ) {
     NavHost(
@@ -94,6 +106,42 @@ fun HermesNavHost(
                 sessionRepository = sessionRepository,
                 configRepository = configRepository,
                 serverUrl = serverUrl,
+                onBack = { navController.popBackStack() },
+                onShowFiles = { navController.navigate(Routes.files(sessionId)) }
+            )
+        }
+
+        composable(
+            route = Routes.FILES,
+            arguments = listOf(
+                navArgument(Routes.FILES_ARG) { type = NavType.StringType }
+            )
+        ) { backStackEntry ->
+            val sessionId = backStackEntry.arguments?.getString(Routes.FILES_ARG).orEmpty()
+            FileBrowserScreen(
+                sessionId = sessionId,
+                workspaceRepository = workspaceRepository,
+                onBack = { navController.popBackStack() },
+                onFileOpen = { filePath ->
+                    navController.navigate(Routes.filePreview(sessionId, filePath))
+                }
+            )
+        }
+
+        composable(
+            route = Routes.FILE_PREVIEW,
+            arguments = listOf(
+                navArgument(Routes.FILE_PREVIEW_SESSION_ARG) { type = NavType.StringType },
+                navArgument(Routes.FILE_PREVIEW_PATH_ARG) { type = NavType.StringType }
+            )
+        ) { backStackEntry ->
+            val sessionId = backStackEntry.arguments?.getString(Routes.FILE_PREVIEW_SESSION_ARG).orEmpty()
+            val encodedPath = backStackEntry.arguments?.getString(Routes.FILE_PREVIEW_PATH_ARG).orEmpty()
+            val filePath = encodedPath.replace("::", "/")  // decode slashes
+            FilePreviewScreen(
+                sessionId = sessionId,
+                filePath = filePath,
+                workspaceRepository = workspaceRepository,
                 onBack = { navController.popBackStack() }
             )
         }

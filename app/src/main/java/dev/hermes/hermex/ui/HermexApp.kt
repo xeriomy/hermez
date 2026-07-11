@@ -15,6 +15,7 @@ import dev.hermes.core.auth.AuthRepository
 import dev.hermes.core.auth.AuthState
 import dev.hermes.core.data.ConfigRepository
 import dev.hermes.core.data.SessionRepository
+import dev.hermes.core.data.WorkspaceRepository
 import dev.hermes.hermex.ui.navigation.HermesNavHost
 import dev.hermes.hermex.ui.navigation.Routes
 
@@ -23,6 +24,7 @@ fun HermexApp() {
     val authRepository: AuthRepository = viewModel()
     val sessionRepository: SessionRepository = viewModel()
     val configRepository: ConfigRepository = viewModel()
+    val workspaceRepository: WorkspaceRepository = viewModel()
     val authState by authRepository.authState.collectAsStateWithLifecycle()
     val navController = rememberNavController()
 
@@ -65,6 +67,7 @@ fun HermexApp() {
             authRepository = authRepository,
             sessionRepository = sessionRepository,
             configRepository = configRepository,
+            workspaceRepository = workspaceRepository,
             serverUrl = serverUrl
         )
     }
