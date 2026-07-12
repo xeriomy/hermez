@@ -46,6 +46,18 @@ class ChatViewModel(
     private val _isStreaming = MutableStateFlow(false)
     val isStreaming: StateFlow<Boolean> = _isStreaming.asStateFlow()
 
+    /**
+     * Holds the streaming assistant response text SEPARATELY from the
+     * messages list. This is the PERF-1 fix: appending a token to a
+     * String is O(1), vs the old O(N) list copy + Markdown re-parse.
+     * On stream completion, the full text is persisted to Room and
+     * appears in [_messages] via the Room Flow observer — with full
+     * Markdown rendering. While streaming, the UI renders this as
+     * plain Text (no Markdown) for maximum speed.
+     */
+    private val _streamingContent = MutableStateFlow("")
+    val streamingContent: StateFlow<String> = _streamingContent.asStateFlow()
+
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 
@@ -199,12 +211,13 @@ class ChatViewModel(
         files: List<String>? = null
     ) {
         _isStreaming.value = true
+        _streamingContent.value = ""  // clear any previous streaming content
 
         // Track the user message and assistant message so we can persist
         // them to Room when the stream completes (BUG-2 fix).
         val userMessage = _messages.value.lastOrNull { it.role == "user" }
-        var assistantMessageId: String? = null
-        var assistantContent = StringBuilder()
+        val assistantMessageId = "stream_${System.currentTimeMillis()}"
+        val assistantContent = StringBuilder()
 
         streamJob = viewModelScope.launch {
             try {
@@ -230,39 +243,26 @@ class ChatViewModel(
                         errorMsg
                     }
                     _isStreaming.value = false
+                    _streamingContent.value = ""
                     return@launch
                 }
                 val streamId = start.getOrNull()?.stream_id ?: run {
                     _error.value = "No stream ID returned"
                     _isStreaming.value = false
+                    _streamingContent.value = ""
                     return@launch
                 }
 
                 chatStream.streamEvents(streamId).collect { event ->
                     when (event) {
                         is ChatStream.StreamEvent.Token -> {
-                            // Track content for persistence
-                            if (assistantMessageId == null) {
-                                assistantMessageId = "stream_${System.currentTimeMillis()}"
-                            }
+                            // PERF-1 fix: append to StringBuilder (O(1)) and
+                            // update the separate streamingContent StateFlow.
+                            // Do NOT modify _messages — no list copy, no
+                            // Markdown re-parse. The UI shows this as plain
+                            // Text while streaming.
                             assistantContent.append(event.token)
-
-                            // Update UI
-                            val existing = _messages.value
-                            val last = existing.lastOrNull()
-                            val updated = if (last != null && last.role == "assistant") {
-                                existing.toMutableList().also {
-                                    it[it.size - 1] = last.copy(content = last.content + event.token)
-                                }
-                            } else {
-                                existing + ChatMessage(
-                                    messageId = assistantMessageId!!,
-                                    role = "assistant",
-                                    content = event.token,
-                                    timestamp = System.currentTimeMillis()
-                                )
-                            }
-                            _messages.value = updated
+                            _streamingContent.value = assistantContent.toString()
                         }
                         is ChatStream.StreamEvent.Done -> Unit
                         is ChatStream.StreamEvent.StreamEnd -> Unit
@@ -295,6 +295,8 @@ class ChatViewModel(
                     }
                 }
                 _isStreaming.value = false
+                _streamingContent.value = ""  // clear streaming text — the
+                // final message will appear in _messages via Room observer
                 streamJob = null
             }
         }

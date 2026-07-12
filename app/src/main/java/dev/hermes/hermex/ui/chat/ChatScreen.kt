@@ -100,6 +100,7 @@ fun ChatScreen(
 
     val messages by chatViewModel.messages.collectAsStateWithLifecycle()
     val isStreaming by chatViewModel.isStreaming.collectAsStateWithLifecycle()
+    val streamingContent by chatViewModel.streamingContent.collectAsStateWithLifecycle()
     val error by chatViewModel.error.collectAsStateWithLifecycle()
     val remainingToLoad by chatViewModel.remainingToLoad.collectAsStateWithLifecycle()
     val isInitialLoading by chatViewModel.isInitialLoading.collectAsStateWithLifecycle()
@@ -228,7 +229,15 @@ fun ChatScreen(
                 MessageBubble(message = msg)
             }
 
-            if (isStreaming) {
+            // PERF-1 fix: while streaming, show the partial response as
+            // plain Text (no Markdown re-parse). On stream completion,
+            // the full message appears in `messages` via Room observer
+            // with full Markdown rendering.
+            if (isStreaming && streamingContent.isNotEmpty()) {
+                item {
+                    StreamingBubble(content = streamingContent)
+                }
+            } else if (isStreaming) {
                 item {
                     Box(
                         modifier = Modifier.fillMaxWidth(),
@@ -459,6 +468,34 @@ fun ChatScreen(
     }
 
     // Config bottom sheet (+ button → Message options)
+}
+
+/**
+ * Streaming bubble — renders the partial assistant response as PLAIN TEXT
+ * (no Markdown) while streaming. This is the PERF-1 fix: plain Text is
+ * O(1) per token update, vs Markdown which re-parses the entire content
+ * on every token. When streaming ends, the full message appears in the
+ * messages list via Room observer with full Markdown rendering.
+ */
+@Composable
+fun StreamingBubble(content: String) {
+    Box(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+        contentAlignment = Alignment.CenterStart
+    ) {
+        Card(
+            modifier = Modifier.fillMaxWidth(0.85f).padding(vertical = 4.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceContainerHighest
+            )
+        ) {
+            Text(
+                text = content,
+                modifier = Modifier.padding(16.dp),
+                color = MaterialTheme.colorScheme.onSurface
+            )
+        }
+    }
 }
 
 @Composable
