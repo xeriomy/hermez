@@ -37,7 +37,7 @@ object Routes {
     fun chat(sessionId: String): String = "chat/$sessionId"
     fun files(sessionId: String): String = "files/$sessionId"
     fun filePreview(sessionId: String, filePath: String): String =
-        "file/$sessionId/${filePath.replace("/", "::")}"  // encode slashes
+        "file/$sessionId/${android.net.Uri.encode(filePath)}"  // BUG-8 fix: proper URL encoding
 }
 
 /**
@@ -140,7 +140,7 @@ fun HermesNavHost(
         ) { backStackEntry ->
             val sessionId = backStackEntry.arguments?.getString(Routes.FILE_PREVIEW_SESSION_ARG).orEmpty()
             val encodedPath = backStackEntry.arguments?.getString(Routes.FILE_PREVIEW_PATH_ARG).orEmpty()
-            val filePath = encodedPath.replace("::", "/")  // decode slashes
+            val filePath = android.net.Uri.decode(encodedPath)  // BUG-8 fix: proper URL decoding
             FilePreviewScreen(
                 sessionId = sessionId,
                 filePath = filePath,
