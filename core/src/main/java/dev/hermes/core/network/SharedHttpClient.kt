@@ -4,7 +4,6 @@ import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.plugins.cookies.AcceptAllCookiesStorage
-import io.ktor.client.plugins.cookies.CookiesStorage
 import io.ktor.client.plugins.cookies.HttpCookies
 import io.ktor.client.plugins.defaultRequest
 import io.ktor.client.request.header
@@ -38,12 +37,16 @@ object SharedHttpClient {
 
     /**
      * The single shared cookie storage. Lives across client recreations
-     * so the auth cookie survives URL changes (when the user logs in to
-     * the same server again). Exposed so [ChatStream]'s SSE client can
-     * share it — the SSE plugin needs its own HttpClient but should use
-     * the same cookies.
+     * so the auth cookie survives within a session. Exposed so
+     * [ChatStream]'s SSE client can share it — the SSE plugin needs its
+     * own HttpClient but should use the same cookies.
+     *
+     * Replaced with a fresh instance on logout (reset) and on URL change
+     * (client) to prevent auth cookies from server A being sent to
+     * server B. (BUG-10 fix)
      */
-    val cookieStorage: CookiesStorage = AcceptAllCookiesStorage()
+    @Volatile
+    var cookieStorage: AcceptAllCookiesStorage = AcceptAllCookiesStorage()
 
     @Volatile
     private var currentUrl: String? = null
@@ -82,9 +85,12 @@ object SharedHttpClient {
             }
         }
 
-        // Slow path: URL changed (or first call) — close old, create new
+        // Slow path: URL changed (or first call) — close old client,
+        // clear cookies (BUG-10: prevent auth cookies from server A
+        // being sent to server B), create new client.
         synchronized(this) {
             currentClient?.close()
+            cookieStorage = AcceptAllCookiesStorage()  // BUG-10: fresh cookie jar on URL change
             val newClient = createClient(normalized)
             currentClient = newClient
             currentUrl = normalized
@@ -93,15 +99,16 @@ object SharedHttpClient {
     }
 
     /**
-     * Drop the current client. Cookies are kept in [cookieStorage] (so
-     * re-login to the same server is instant), but the HttpClient itself
-     * is closed. Called on logout.
+     * Drop the current client and clear all cookies. Called on logout.
+     * Ensures no auth cookies survive across logout/login cycles or
+     * server switches. (BUG-10 fix)
      */
     fun reset() {
         synchronized(this) {
             currentClient?.close()
             currentClient = null
             currentUrl = null
+            cookieStorage = AcceptAllCookiesStorage()  // BUG-10: fresh cookie jar on logout
         }
     }
 
