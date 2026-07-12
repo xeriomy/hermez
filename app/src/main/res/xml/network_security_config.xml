@@ -16,14 +16,18 @@
     globally — the same approach used by Syncthing, Home Assistant, and
     other self-hosted client apps.
 
-    This mirrors the iOS app, which allows plain HTTP for Tailscale's
-    100.64.0.0/10 range and localhost.
+    Trust anchors: system CA certificates only. We do NOT trust
+    user-installed certificates — that would allow MITM attacks on
+    corporate-managed (MDM) devices where a malicious admin could
+    install a cert and intercept all HTTPS traffic including the
+    password POST. If a power user needs to connect to a self-signed
+    server, a future "trust this certificate" in-app flow will handle
+    that case explicitly.
 -->
 <network-security-config>
     <base-config cleartextTrafficPermitted="true">
         <trust-anchors>
             <certificates src="system" />
-            <certificates src="user" />
         </trust-anchors>
     </base-config>
 </network-security-config>
