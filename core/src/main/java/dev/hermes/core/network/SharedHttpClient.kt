@@ -144,15 +144,23 @@ object SharedHttpClient {
     }
 
     /**
-     * Ensure a URL has an http:// or https:// scheme. If the user
-     * typed a bare `host:port` (e.g. `127.0.0.1:8787`), prepend
-     * `http://`. Ktor's URL parser throws "Fail to parse url" without
-     * a scheme.
+     * Ensure a URL has a scheme. If the user typed a bare `host:port`
+     * (e.g. `127.0.0.1:8787`), prepend `http://`. Ktor's URL parser
+     * throws "Fail to parse url" without a scheme.
+     *
+     * BUG-9 fix: the old code only checked for http:// and https://.
+     * Any other scheme (ftp://, ws://, file://) was mangled —
+     * normalizeUrl("ftp://example.com") returned "http://ftp://example.com".
+     * Now we check for ANY scheme using a regex, and only prepend http://
+     * if there is no scheme at all.
      */
     fun normalizeUrl(url: String): String {
         val trimmed = url.trim()
+        // Check for any scheme: starts with a letter, followed by letters/
+        // digits/+/-/., then "://". Matches http://, https://, ftp://, ws://, etc.
+        val schemeRegex = Regex("^[a-zA-Z][a-zA-Z0-9+.-]*://")
         return when {
-            trimmed.startsWith("http://") || trimmed.startsWith("https://") -> trimmed
+            schemeRegex.containsMatchIn(trimmed) -> trimmed
             trimmed.startsWith("//") -> "http:$trimmed"
             else -> "http://$trimmed"
         }
