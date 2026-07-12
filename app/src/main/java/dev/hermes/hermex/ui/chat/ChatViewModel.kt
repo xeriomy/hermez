@@ -280,13 +280,24 @@ class ChatViewModel(
                             _streamingContent.value = assistantContent.toString()
                         }
                         is ChatStream.StreamEvent.Done -> Unit
-                        is ChatStream.StreamEvent.StreamEnd -> Unit
+                        is ChatStream.StreamEvent.StreamEnd -> {
+                            // BUG-6 fix: StreamEnd is the authoritative "we
+                            // are done" signal. Throw to exit the collect loop
+                            // immediately — don't wait for the SSE connection
+                            // to close (some servers keep it open for reuse).
+                            // The catch block suppresses this exception; the
+                            // finally block handles persistence + cleanup.
+                            throw StreamEndSignal()
+                        }
                         is ChatStream.StreamEvent.Error -> {
                             _error.value = event.message ?: "Stream error"
                         }
                         else -> Unit
                     }
                 }
+            } catch (e: StreamEndSignal) {
+                // Expected — stream ended normally via StreamEnd event.
+                // Don't show an error. The finally block handles cleanup.
             } catch (e: Exception) {
                 _error.value = friendlyError(e)
             } finally {
@@ -329,3 +340,10 @@ class ChatViewModel(
         private const val LOAD_MORE_COUNT = 20
     }
 }
+
+/**
+ * Thrown when a StreamEnd SSE event is received, to break out of the
+ * collect loop. Caught and suppressed — not an error, just a signal
+ * that the stream is done. (BUG-6 fix)
+ */
+private class StreamEndSignal : Exception()
