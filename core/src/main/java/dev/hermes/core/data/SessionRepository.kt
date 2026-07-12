@@ -56,6 +56,58 @@ class SessionRepository(app: Application) : AndroidViewModel(app) {
         db.messageDao().getMessageCount(sessionId)
 
     /**
+     * Persist a locally-sent user message + the assistant's streamed
+     * response to Room. Called when a chat stream completes so the
+     * messages survive navigation away and back.
+     *
+     * Uses OnConflictStrategy.REPLACE on messageId so re-inserting
+     * (e.g. when loadSession fetches the same messages from the server)
+     * is a no-op, not a duplicate.
+     */
+    suspend fun persistLocalMessages(
+        sessionId: String,
+        userMessageId: String,
+        userContent: String,
+        userTimestamp: Long,
+        assistantMessageId: String?,
+        assistantContent: String?,
+        assistantTimestamp: Long?
+    ) {
+        db.messageDao().insertMessage(
+            dev.hermes.core.data.local.MessageEntity(
+                sessionId = sessionId,
+                messageId = userMessageId,
+                role = "user",
+                content = userContent,
+                timestamp = userTimestamp,
+                model = null,
+                provider = null,
+                toolCalls = null,
+                reasoning = null,
+                attachments = null,
+                metadata = null
+            )
+        )
+        if (assistantMessageId != null && !assistantContent.isNullOrBlank()) {
+            db.messageDao().insertMessage(
+                dev.hermes.core.data.local.MessageEntity(
+                    sessionId = sessionId,
+                    messageId = assistantMessageId,
+                    role = "assistant",
+                    content = assistantContent,
+                    timestamp = assistantTimestamp ?: System.currentTimeMillis(),
+                    model = null,
+                    provider = null,
+                    toolCalls = null,
+                    reasoning = null,
+                    attachments = null,
+                    metadata = null
+                )
+            )
+        }
+    }
+
+    /**
      * Clear ALL locally cached sessions and messages. The server is not
      * contacted — this only wipes the Room database. Data will be re-fetched
      * from the server on next refresh.

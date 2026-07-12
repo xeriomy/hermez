@@ -199,6 +199,13 @@ class ChatViewModel(
         files: List<String>? = null
     ) {
         _isStreaming.value = true
+
+        // Track the user message and assistant message so we can persist
+        // them to Room when the stream completes (BUG-2 fix).
+        val userMessage = _messages.value.lastOrNull { it.role == "user" }
+        var assistantMessageId: String? = null
+        var assistantContent = StringBuilder()
+
         streamJob = viewModelScope.launch {
             try {
                 val start = chatStream.startChat(
@@ -234,6 +241,13 @@ class ChatViewModel(
                 chatStream.streamEvents(streamId).collect { event ->
                     when (event) {
                         is ChatStream.StreamEvent.Token -> {
+                            // Track content for persistence
+                            if (assistantMessageId == null) {
+                                assistantMessageId = "stream_${System.currentTimeMillis()}"
+                            }
+                            assistantContent.append(event.token)
+
+                            // Update UI
                             val existing = _messages.value
                             val last = existing.lastOrNull()
                             val updated = if (last != null && last.role == "assistant") {
@@ -242,7 +256,7 @@ class ChatViewModel(
                                 }
                             } else {
                                 existing + ChatMessage(
-                                    messageId = "stream_${System.currentTimeMillis()}",
+                                    messageId = assistantMessageId!!,
                                     role = "assistant",
                                     content = event.token,
                                     timestamp = System.currentTimeMillis()
@@ -261,6 +275,25 @@ class ChatViewModel(
             } catch (e: Exception) {
                 _error.value = friendlyError(e)
             } finally {
+                // BUG-2 fix: persist the user message + assistant response
+                // to Room so they survive navigation away and back.
+                if (userMessage != null) {
+                    try {
+                        sessionRepository.persistLocalMessages(
+                            sessionId = sessionId,
+                            userMessageId = userMessage.messageId,
+                            userContent = userMessage.content,
+                            userTimestamp = userMessage.timestamp,
+                            assistantMessageId = assistantMessageId,
+                            assistantContent = assistantContent.toString().ifBlank { null },
+                            assistantTimestamp = System.currentTimeMillis()
+                        )
+                    } catch (_: Exception) {
+                        // Persistence failure is non-fatal — the messages
+                        // are still in memory and will be re-fetched from
+                        // the server on next loadSession.
+                    }
+                }
                 _isStreaming.value = false
                 streamJob = null
             }
