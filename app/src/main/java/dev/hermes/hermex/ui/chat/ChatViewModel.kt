@@ -89,22 +89,37 @@ class ChatViewModel(
      *     The Flow observer picks up the new data automatically.
      *
      * This is the local-first pattern used by Claude, Gemini, WhatsApp.
+     *
+     * BUG-5 fix: the early return `if (loadedSessionId == sessionId) return`
+     * prevented re-initialising when the user navigated back to the same
+     * session. But the cacheObserverJob cancel on line 98 never ran because
+     * of that early return — so if the observer was cancelled (e.g. by the
+     * NavBackStackEntry being cleared), returning to the chat did not
+     * restart it. Messages became stale: writes to Room no longer
+     * propagated to the UI.
+     *
+     * Fix: only skip the server fetch if already loaded for this session.
+     * Always cancel + re-observe the Room Flow — the cost is negligible
+     * (Room Flow is cheap) and ensures the UI stays in sync.
      */
     fun loadMessages(sessionId: String) {
-        if (loadedSessionId == sessionId) return
+        val isSameSession = loadedSessionId == sessionId
         loadedSessionId = sessionId
 
-        // Cancel any previous cache observer (e.g. from a different session)
+        // Always cancel + re-observe the Room Flow — even if it's the same
+        // session. The previous observer may have been cancelled when the
+        // NavBackStackEntry was cleared. Room Flow is cheap.
         cacheObserverJob?.cancel()
-
-        // 1. Observe Room cache as a Flow — instant updates when cache changes
         cacheObserverJob = sessionRepository.getMessages(sessionId, INITIAL_MESSAGE_COUNT)
             .onEach { entities ->
-                val chatMessages = entities.map { it.toChatMessage() }
-                _messages.value = chatMessages
+                _messages.value = entities.map { it.toChatMessage() }
                 updateRemainingCount(sessionId)
             }
             .launchIn(viewModelScope)
+
+        // Only fetch from server if this is the first load for this session.
+        // Skip on return navigation to avoid redundant network calls.
+        if (isSameSession) return
 
         // 2. Background fetch from server — don't block the UI
         val cacheIsEmpty = _messages.value.isEmpty()
