@@ -2,14 +2,11 @@ package dev.hermes.core.data.local
 
 import androidx.room.Entity
 import androidx.room.PrimaryKey
-import kotlinx.serialization.Serializable
 
 @Entity(tableName = "messages")
-@Serializable
 data class MessageEntity(
-    @PrimaryKey(autoGenerate = true) val id: Int = 0,
+    @PrimaryKey val messageId: String,
     val sessionId: String,
-    val messageId: String,
     val role: String,
     val content: String,
     val timestamp: Long,
