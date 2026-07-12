@@ -168,10 +168,12 @@ class SessionRepository(app: Application) : AndroidViewModel(app) {
         )
         db.sessionDao().insertSession(entity)
 
-        // Clear existing messages for this session before re-inserting.
-        // Without this, re-opening the chat re-inserts the same messages
-        // with new auto-generated primary keys, causing duplicates.
-        db.messageDao().deleteMessagesForSession(sessionId)
+        // BUG-3 fix: DO NOT delete existing messages before re-inserting.
+        // Now that messageId is the primary key (BUG-4 fix), REPLACE
+        // dedupes correctly — re-inserting the same 50 messages from the
+        // server is a no-op. Older messages that the user previously
+        // loaded via "Load more" stay in the cache. New messages from
+        // the server get added.
         session.messages?.forEach { msg ->
             db.messageDao().insertMessage(msg.toEntity(sessionId))
         }
