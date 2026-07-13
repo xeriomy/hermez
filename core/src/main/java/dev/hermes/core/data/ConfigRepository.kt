@@ -10,6 +10,9 @@ import io.ktor.client.call.body
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -45,40 +48,46 @@ class ConfigRepository(app: Application) : AndroidViewModel(app) {
      * Fetch models, workspaces, and profiles from the server in one call.
      * Safe to call multiple times — only fetches once unless forceRefresh.
      */
-    suspend fun loadConfig(forceRefresh: Boolean = false) {
+    suspend fun loadConfig(forceRefresh: Boolean = false) = coroutineScope {
         if (!forceRefresh && (_models.value.isNotEmpty() || _workspaces.value.isNotEmpty())) {
-            return
+            return@coroutineScope
         }
         _isLoading.value = true
         try {
-            val c = client() ?: return
+            val c = client() ?: return@coroutineScope
 
-            // Fetch models
-            try {
-                val response = c.get(ApiEndpoint.Models.path)
-                if (response.status.isSuccess()) {
-                    val body = response.body<ModelsResponse>()
-                    _models.value = body.models?.map { it.toOption() } ?: emptyList()
-                }
-            } catch (_: Exception) { /* models are optional */ }
+            val modelsDeferred = async {
+                try {
+                    val response = c.get(ApiEndpoint.Models.path)
+                    if (response.status.isSuccess()) {
+                        val body = response.body<ModelsResponse>()
+                        _models.value = body.models?.map { it.toOption() } ?: emptyList()
+                    }
+                } catch (_: Exception) { /* models are optional */ }
+            }
 
-            // Fetch workspaces
-            try {
-                val response = c.get(ApiEndpoint.Workspaces.path)
-                if (response.status.isSuccess()) {
-                    val body = response.body<WorkspacesResponse>()
-                    _workspaces.value = body.workspaces ?: emptyList()
-                }
-            } catch (_: Exception) { }
+            val workspacesDeferred = async {
+                try {
+                    val response = c.get(ApiEndpoint.Workspaces.path)
+                    if (response.status.isSuccess()) {
+                        val body = response.body<WorkspacesResponse>()
+                        _workspaces.value = body.workspaces ?: emptyList()
+                    }
+                } catch (_: Exception) { }
+            }
 
-            // Fetch profiles
-            try {
-                val response = c.get(ApiEndpoint.Profiles.path)
-                if (response.status.isSuccess()) {
-                    val body = response.body<ProfilesResponse>()
-                    _profiles.value = body.profiles ?: emptyList()
-                }
-            } catch (_: Exception) { }
+            val profilesDeferred = async {
+                try {
+                    val response = c.get(ApiEndpoint.Profiles.path)
+                    if (response.status.isSuccess()) {
+                        val body = response.body<ProfilesResponse>()
+                        _profiles.value = body.profiles ?: emptyList()
+                    }
+                } catch (_: Exception) { }
+            }
+
+            // Wait for all three to complete
+            awaitAll(modelsDeferred, workspacesDeferred, profilesDeferred)
         } finally {
             _isLoading.value = false
         }

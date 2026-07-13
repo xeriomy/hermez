@@ -78,7 +78,8 @@ class ChatViewModel(
     val messages: StateFlow<List<ChatMessage>> = _messages.asStateFlow()
 
     /** How many older messages are available to load (total - visible). */
-    val remainingToLoad: StateFlow<Int> = MutableStateFlow(0)
+    private val _remainingToLoad = MutableStateFlow(0)
+    val remainingToLoad: StateFlow<Int> = _remainingToLoad.asStateFlow()
 
     /**
      * Called when the chat screen appears. Does two things:
@@ -170,7 +171,7 @@ class ChatViewModel(
     private suspend fun updateRemainingCount(sessionId: String) {
         val total = sessionRepository.getMessageCount(sessionId)
         _totalCached.value = total
-        (remainingToLoad as MutableStateFlow).value = (total - _messages.value.size).coerceAtLeast(0)
+        _remainingToLoad.value = (total - _messages.value.size).coerceAtLeast(0)
     }
 
     fun sendMessage(

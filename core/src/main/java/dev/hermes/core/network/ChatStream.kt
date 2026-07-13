@@ -58,6 +58,21 @@ class ChatStream(
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     private val sseClient = HttpClient(OkHttp) {
         expectSuccess = false
+
+        // PERF-4 fix: configure OkHttp timeouts for SSE.
+        // OkHttp defaults: 10s connect, 10s read, 10s write.
+        // The 10s read timeout kills SSE connections when the server
+        // doesn't send a token within 10s (normal for long-running
+        // reasoning or tool calls). Set read timeout to 0 (infinite)
+        // so the SSE connection stays alive during long pauses.
+        engine {
+            config {
+                connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+                readTimeout(0, java.util.concurrent.TimeUnit.MILLISECONDS)  // infinite
+                writeTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+            }
+        }
+
         install(ContentNegotiation) {
             json(Json { ignoreUnknownKeys = true })
         }
