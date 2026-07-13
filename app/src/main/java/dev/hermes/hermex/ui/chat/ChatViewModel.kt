@@ -135,9 +135,12 @@ class ChatViewModel(
     /**
      * Convenience: true while any non-Idle state is active. The UI uses
      * this to disable the Send button, show the Stop button, etc.
+     *
+     * Delegates to [isStreamActive] (top-level extension function) so
+     * the logic is unit-testable without instantiating ChatViewModel.
      */
     val isStreaming: StateFlow<Boolean> = _streamState
-        .map { it !is StreamState.Idle && it !is StreamState.Failed }
+        .map { it.isStreamActive() }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
 
     // ------------------------------------------------------------------
@@ -176,9 +179,7 @@ class ChatViewModel(
     val allMessages: StateFlow<List<ChatMessage>> = combine(
         _pendingMessages, messages
     ) { pending, persisted ->
-        if (pending.isEmpty()) return@combine persisted
-        val persistedKeys = persisted.map { it.content + it.timestamp }.toSet()
-        pending.filter { (it.content + it.timestamp) !in persistedKeys } + persisted
+        dedupPendingWithPersisted(pending, persisted)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     // ------------------------------------------------------------------
@@ -623,3 +624,55 @@ class ChatViewModel(
         private const val LOAD_MORE_INCREMENT = 20
     }
 }
+
+// ----------------------------------------------------------------------
+// Pure functions extracted for testability
+// ----------------------------------------------------------------------
+
+/**
+ * Dedup pending (optimistic) messages against persisted (server-authoritative)
+ * messages by content+timestamp, then concatenate.
+ *
+ * Used by [ChatViewModel.allMessages] to merge the two sources without
+ * showing duplicates when the server returns the user message with a
+ * real ID (the pending copy is filtered out).
+ *
+ * Extracted to a top-level function so it can be unit-tested without
+ * instantiating ChatViewModel (which needs a SessionRepository, which
+ * needs Android Context).
+ *
+ * **Dedup heuristic:** `content + timestamp` as a string key. This
+ * could fail if the user sends two identical messages in the same
+ * millisecond — vanishingly rare. A more robust dedup would use the
+ * server's message_id, but that requires the stream_end event to
+ * include it. See chat rewrite §8.3.
+ *
+ * @param pending Optimistic user messages, NOT in Room.
+ * @param persisted Server-authoritative messages from Room.
+ * @return Pending messages (filtered to remove any whose content+timestamp
+ *   matches a persisted message) followed by persisted messages.
+ */
+internal fun dedupPendingWithPersisted(
+    pending: List<ChatMessage>,
+    persisted: List<ChatMessage>
+): List<ChatMessage> {
+    if (pending.isEmpty()) return persisted
+    val persistedKeys = persisted.map { it.content + it.timestamp }.toSet()
+    return pending.filter { (it.content + it.timestamp) !in persistedKeys } + persisted
+}
+
+/**
+ * Returns true if the given [StreamState] represents an actively
+ * streaming state (Starting, Streaming, Completing, or Cancelling).
+ *
+ * Used by [ChatViewModel.isStreaming] — extracted to a top-level
+ * function so it can be unit-tested without instantiating ChatViewModel.
+ *
+ * Idle and Failed return false — the UI uses this to decide whether
+ * to show the Stop button vs the Send button.
+ */
+internal fun StreamState.isStreamActive(): Boolean =
+    this is StreamState.Starting ||
+        this is StreamState.Streaming ||
+        this is StreamState.Completing ||
+        this is StreamState.Cancelling
