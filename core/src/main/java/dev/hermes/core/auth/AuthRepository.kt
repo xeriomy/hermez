@@ -74,15 +74,14 @@ class AuthRepository(app: Application) : AndroidViewModel(app) {
     private val _authState = MutableStateFlow<AuthState>(AuthState.LoggedOut)
     val authState: StateFlow<AuthState> = _authState.asStateFlow()
 
-    private val prefsRepository = AuthPrefsRepository(context)
-
     init {
+        AuthPrefsRepository.init(context)
         // On cold start, if we have a saved server URL, jump straight to
         // LoggedIn. We DON'T restore the auth cookie (cookies don't
         // survive app process death in Ktor's in-memory storage), so the
         // next API call will 401 and the UI can prompt for re-login.
         // The SessionRepository handles that 401 gracefully.
-        val savedUrl = prefsRepository.getServerUrl()
+        val savedUrl = AuthPrefsRepository.getServerUrl()
         if (savedUrl != null) {
             _authState.value = AuthState.LoggedIn(savedUrl)
         }
@@ -173,7 +172,7 @@ class AuthRepository(app: Application) : AndroidViewModel(app) {
                 // Either no auth required, or login succeeded — persist &
                 // transition. The auth cookie is now in SharedHttpClient's
                 // cookie jar, shared with every other repository.
-                prefsRepository.saveServerUrl(normalized)
+                AuthPrefsRepository.saveServerUrl(normalized)
                 _authState.value = AuthState.LoggedIn(normalized)
                 return LoginResult.Success
             }
@@ -190,7 +189,7 @@ class AuthRepository(app: Application) : AndroidViewModel(app) {
      * cookie has a 24h TTL per upstream and will expire on its own.
      */
     fun logout() {
-        prefsRepository.clearServerUrl()
+        AuthPrefsRepository.clearServerUrl()
         SharedHttpClient.reset()
         _authState.value = AuthState.LoggedOut
     }
@@ -214,15 +213,28 @@ class AuthRepository(app: Application) : AndroidViewModel(app) {
  * the constructor) because MasterKey + EncryptedSharedPreferences
  * creation involves Android Keystore operations that can take 100-500ms
  * on first launch. Doing it lazily keeps the Activity startup fast.
+ *
+ * ARCH-4 fix: made a singleton object so all repositories share one
+ * instance (one MasterKey, one EncryptedSharedPreferences) instead
+ * of each creating its own. Call AuthPrefsRepository.init(context)
+ * once from Application onCreate (or from the first repository's init).
  */
-class AuthPrefsRepository(private val context: android.content.Context) {
+object AuthPrefsRepository {
+
+    private lateinit var appContext: android.content.Context
+
+    fun init(context: android.content.Context) {
+        if (!::appContext.isInitialized) {
+            appContext = context.applicationContext
+        }
+    }
 
     private val encryptedPrefs by lazy {
-        val masterKey = MasterKey.Builder(context)
+        val masterKey = MasterKey.Builder(appContext)
             .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
             .build()
         EncryptedSharedPreferences.create(
-            context,
+            appContext,
             "hermes_auth_prefs",
             masterKey,
             EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
@@ -242,7 +254,5 @@ class AuthPrefsRepository(private val context: android.content.Context) {
         encryptedPrefs.edit().remove(KEY_SERVER_URL).apply()
     }
 
-    companion object {
-        private const val KEY_SERVER_URL = "server_url"
-    }
+    private const val KEY_SERVER_URL = "server_url"
 }

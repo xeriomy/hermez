@@ -22,7 +22,7 @@ import kotlinx.serialization.json.Json
 class SessionRepository(app: Application) : AndroidViewModel(app) {
     private val context = app.applicationContext
     private val db = AppDatabase.getInstance(context)
-    private val prefsRepository = AuthPrefsRepository(context)
+    init { AuthPrefsRepository.init(context) }
 
     /**
      * Borrow the process-wide shared [HttpClient] from [SharedHttpClient].
@@ -32,7 +32,7 @@ class SessionRepository(app: Application) : AndroidViewModel(app) {
      * used for login, the auth cookie is already in the cookie jar — no
      * need to re-authenticate.
      */
-    private fun client(): HttpClient? = SharedHttpClient.client(prefsRepository.getServerUrl())
+    private fun client(): HttpClient? = SharedHttpClient.client(AuthPrefsRepository.getServerUrl())
 
     fun getActiveSessions(): Flow<List<SessionEntity>> = db.sessionDao().getActiveSessions()
     fun getArchivedSessions(): Flow<List<SessionEntity>> = db.sessionDao().getArchivedSessions()
@@ -121,6 +121,12 @@ class SessionRepository(app: Application) : AndroidViewModel(app) {
         val client = client() ?: throw Exception("Not connected to a server. Log in first.")
         val response = client.get(ApiEndpoint.Sessions.path)
         if (!response.status.isSuccess()) {
+            // BUG-11 fix: on 401, force logout so the user is redirected
+            // to the login screen instead of seeing a stale error message.
+            if (response.status.value == 401) {
+                AuthPrefsRepository.clearServerUrl()
+                dev.hermes.core.network.SharedHttpClient.reset()
+            }
             throw Exception(when (response.status.value) {
                 401 -> "Session expired. Please log in again."
                 403 -> "Forbidden — your account can't list sessions."

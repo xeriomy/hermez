@@ -14,7 +14,7 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "HermexAndroid"
+rootProject.name = "Hermez"
 
 include(":app")
 include(":core")

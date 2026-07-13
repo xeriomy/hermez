@@ -27,10 +27,10 @@ import kotlinx.serialization.Serializable
  */
 class WorkspaceRepository(app: Application) : AndroidViewModel(app) {
 
-    private val prefsRepository = AuthPrefsRepository(app.applicationContext)
+    init { AuthPrefsRepository.init(app.applicationContext) }
 
     private fun client(): HttpClient? =
-        SharedHttpClient.client(prefsRepository.getServerUrl())
+        SharedHttpClient.client(AuthPrefsRepository.getServerUrl())
 
     /**
      * List files in a directory on the server.

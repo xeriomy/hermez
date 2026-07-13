@@ -27,7 +27,7 @@ import kotlinx.serialization.Serializable
  */
 class ConfigRepository(app: Application) : AndroidViewModel(app) {
 
-    private val prefsRepository = AuthPrefsRepository(app.applicationContext)
+    init { AuthPrefsRepository.init(app.applicationContext) }
 
     private val _models = MutableStateFlow<List<ModelOption>>(emptyList())
     val models: StateFlow<List<ModelOption>> = _models.asStateFlow()
@@ -42,7 +42,7 @@ class ConfigRepository(app: Application) : AndroidViewModel(app) {
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
     private fun client(): HttpClient? =
-        SharedHttpClient.client(prefsRepository.getServerUrl())
+        SharedHttpClient.client(AuthPrefsRepository.getServerUrl())
 
     /**
      * Fetch models, workspaces, and profiles from the server in one call.
