@@ -496,14 +496,28 @@ class ChatViewModel(
                             android.util.Log.d("ChatViewModel", "Title: ${event.title}")
                         }
                         is ChatStream.StreamEvent.Done -> Unit // per-message, not stream-end
+                        is ChatStream.StreamEvent.InterimAssistant -> Unit // not used yet
                         is ChatStream.StreamEvent.StreamEnd -> return@collect // CHAT-10 fix
                         is ChatStream.StreamEvent.Error -> {
                             _error.value = event.message ?: "Stream error"
                             _streamState.value = StreamState.Failed(_error.value!!)
-                            return@launch
+                            // Can't return@launch here — collect is not
+                            // inline, so non-local returns are prohibited.
+                            // return@collect ends this collector invocation;
+                            // the flow ends because streamEvents calls
+                            // return@channelFlow after emitting Error.
+                            return@collect
                         }
                         is ChatStream.StreamEvent.Unknown -> Unit
                     }
+                }
+
+                // If the stream ended with an error, skip the normal
+                // completion path. The Error handler above already set
+                // streamState to Failed and set the error message.
+                if (_streamState.value is StreamState.Failed) {
+                    _pendingMessages.value = _pendingMessages.value.filter { it != userMessage }
+                    return@launch
                 }
 
                 // Normal completion: fetch the authoritative version
