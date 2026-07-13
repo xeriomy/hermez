@@ -450,9 +450,16 @@ class ChatViewModel(
                     tools = tools.toList()
                 )
 
-                // Use a for loop (not collect) so we can break on
-                // StreamEnd. CHAT-10 fix: no exception for control flow.
-                for (event in chatStream.streamEvents(streamId)) {
+                // CHAT-10 fix: use collect with return@collect instead of
+                // throwing a StreamEndSignal exception to break out of the
+                // loop. StreamEnd is always the last event (the SSE
+                // connection closes after it), so return@collect after
+                // StreamEnd effectively ends the collect — the flow closes
+                // naturally and collect returns.
+                //
+                // (A for-loop with break would be cleaner, but Flow.iterator()
+                // is @ExperimentalCoroutinesApi and not worth the opt-in.)
+                chatStream.streamEvents(streamId).collect { event ->
                     when (event) {
                         is ChatStream.StreamEvent.Token -> {
                             content.append(event.token)
@@ -489,7 +496,7 @@ class ChatViewModel(
                             android.util.Log.d("ChatViewModel", "Title: ${event.title}")
                         }
                         is ChatStream.StreamEvent.Done -> Unit // per-message, not stream-end
-                        is ChatStream.StreamEvent.StreamEnd -> break // CHAT-10 fix
+                        is ChatStream.StreamEvent.StreamEnd -> return@collect // CHAT-10 fix
                         is ChatStream.StreamEvent.Error -> {
                             _error.value = event.message ?: "Stream error"
                             _streamState.value = StreamState.Failed(_error.value!!)

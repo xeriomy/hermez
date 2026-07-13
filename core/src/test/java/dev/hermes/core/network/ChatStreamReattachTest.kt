@@ -5,8 +5,6 @@ import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.MockRequestHandleScope
 import io.ktor.client.engine.mock.respond
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
-import io.ktor.client.request.HttpRequestData
-import io.ktor.client.statement.HttpResponseData
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.ContentType
@@ -40,13 +38,17 @@ class ChatStreamReattachTest {
 
     /**
      * Build a ChatStream whose [ChatStream.baseClient] is backed by a
-     * [MockEngine] that runs [handler] for each request. The SSE client
-     * inside ChatStream is still created with OkHttp, but these tests
-     * never open an SSE connection — they only call startChat,
-     * reattachStream, and cancelStream, all of which use baseClient.
+     * [MockEngine] built from [handler]. The SSE client inside ChatStream
+     * is still created with OkHttp, but these tests never open an SSE
+     * connection — they only call startChat, reattachStream, and
+     * cancelStream, all of which use baseClient.
+     *
+     * The handler lambda's type is inferred from MockEngine's
+     * constructor, so we don't need to import HttpRequestData /
+     * HttpResponseData explicitly.
      */
     private fun chatStreamWith(
-        handler: suspend MockRequestHandleScope.(HttpRequestData) -> HttpResponseData
+        handler: suspend MockRequestHandleScope.(io.ktor.client.request.HttpRequestData) -> io.ktor.client.request.HttpResponseData
     ): ChatStream {
         val engine = MockEngine(handler)
         val client = HttpClient(engine) {
@@ -60,12 +62,20 @@ class ChatStreamReattachTest {
         return ChatStream(serverUrl = "http://test", baseClient = client)
     }
 
-    private fun jsonRespond(body: String, status: HttpStatusCode = HttpStatusCode.OK) =
-        respond(
-            body,
-            status,
-            headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString())
-        )
+    /**
+     * Helper: respond with a JSON body. Must be an extension on
+     * [MockRequestHandleScope] because [respond] is itself an extension
+     * on that type — without the receiver, `respond` would be an
+     * unresolved reference.
+     */
+    private fun MockRequestHandleScope.jsonRespond(
+        body: String,
+        status: HttpStatusCode = HttpStatusCode.OK
+    ) = respond(
+        body,
+        status,
+        headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+    )
 
     // ------------------------------------------------------------------
     // reattachStream
@@ -228,7 +238,11 @@ class ChatStreamReattachTest {
     fun `startChat returns success with stream_id`() = runBlocking {
         val stream = chatStreamWith { request ->
             assertEquals("/api/chat/start", request.url.encodedPath)
-            assertEquals(ContentType.Application.Json, request.body.contentType)
+            // Verify the Content-Type header is set to JSON
+            assertEquals(
+                ContentType.Application.Json.toString(),
+                request.headers[HttpHeaders.ContentType]
+            )
             jsonRespond("""{"stream_id":"str_001","session_id":"ses_001"}""")
         }
 
