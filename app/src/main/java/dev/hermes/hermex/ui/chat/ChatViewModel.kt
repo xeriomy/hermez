@@ -21,6 +21,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 
 /**
  * Drives the chat screen. Simple, working implementation.
@@ -286,14 +287,20 @@ class ChatViewModel(
 
                 streamStarted = true
 
-                chatStream.streamEvents(streamId).collect { event ->
-                    when (event) {
+                // Safety net: 5-minute timeout. If the stream hasn't ended
+                // by then (SSE connection hung, server died, etc.), give up
+                // and fetch whatever the server has. This ensures the spinner
+                // can NEVER spin forever.
+                var timedOut = false
+                try {
+                    withTimeout(5 * 60 * 1000L) {
+                        val streamEvents = chatStream.streamEvents(streamId)
+                        var done = false
+                        streamEvents.collect { event ->
+                            if (done) return@collect
+                            when (event) {
                         is ChatStream.StreamEvent.Token -> {
                             content.append(event.token)
-                            // CRITICAL: publish a String copy, not the
-                            // StringBuilder. StateFlow compares by equality;
-                            // if we stored the StringBuilder, the same
-                            // reference would mean "no change" → no emission.
                             _streamingContent.value = content.toString()
                         }
                         is ChatStream.StreamEvent.Reasoning -> {
@@ -318,17 +325,29 @@ class ChatViewModel(
                         }
                         is ChatStream.StreamEvent.Done -> Unit
                         is ChatStream.StreamEvent.InterimAssistant -> Unit
-                        is ChatStream.StreamEvent.StreamEnd -> return@collect
+                        is ChatStream.StreamEvent.StreamEnd -> {
+                            done = true
+                            return@collect
+                        }
                         is ChatStream.StreamEvent.Error -> {
                             _error.value = event.message ?: "Stream error"
+                            done = true
                             return@collect
                         }
                         is ChatStream.StreamEvent.Unknown -> Unit
                     }
+                        } // end collect
+                    } // end withTimeout
+                } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+                    // Stream took too long — fetch whatever the server has.
+                    // This is not an error; the response may just be very long.
+                    timedOut = true
+                    streamId?.let { chatStream.cancelStream(it) }
                 }
 
-                // If the stream ended with an error, skip normal completion.
-                if (_error.value != null) {
+                // If the stream timed out, skip the error check and go
+                // straight to fetching whatever the server has.
+                if (!timedOut && _error.value != null) {
                     sessionRepository.deleteMessage(userMessageId)
                     return@launch
                 }

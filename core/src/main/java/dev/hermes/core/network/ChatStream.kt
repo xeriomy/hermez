@@ -214,31 +214,38 @@ class ChatStream(
                     ApiEndpoint.ChatStream.path,
                     request = {
                         parameter("stream_id", streamId)
-                        // CHAT-12 fix: send the Last-Event-ID header on
-                        // reconnect so the server resumes from the next
-                        // event instead of replaying from the start.
-                        // First connection has lastEventId == null → no header.
                         lastEventId?.let { header("Last-Event-ID", it) }
                     }
                 ) {
-                    // `this` is ClientSSESession. `incoming` is a Flow<ServerSentEvent>.
                     incoming.collect { event ->
-                        // Track the cursor for resumption. The server should
-                        // set `id` on every event; if it doesn't, lastEventId
-                        // stays null and we can't resume — but we don't crash.
                         event.id?.let { lastEventId = it }
 
                         val data = event.data ?: return@collect
                         if (data.isEmpty()) return@collect
-                        val eventName = event.event ?: "unknown"
+
+                        // hermes-webui may send SSE events WITHOUT an
+                        // `event:` field (just `data: {...}`). In that case
+                        // event.event is null. Try the event field first;
+                        // if null, fall back to inferring the type from the
+                        // data content (look for a "type" field or known
+                        // field names in the JSON).
+                        val eventName = event.event
+                            ?: inferEventType(data)
+                            ?: "unknown"
                         val parsed = parseSseEvent(eventName, data, streamId)
                         if (parsed != null) {
                             trySend(parsed)
+                            // CRITICAL: after StreamEnd, close the channelFlow
+                            // so the collector in ChatViewModel stops. Without
+                            // this, the spinner spins forever because collect
+                            // never returns (the SSE connection may stay open).
+                            if (parsed is StreamEvent.StreamEnd) {
+                                close()
+                                return@collect
+                            }
                         }
                     }
                 }
-                // Clean completion (StreamEnd was emitted by the server,
-                // the incoming flow closed normally). Don't retry.
                 return@channelFlow
             } catch (e: CancellationException) {
                 // Never swallow cancellation — it propagates to the
@@ -331,6 +338,37 @@ class ChatStream(
             "stream_end" -> JSON.decodeFromString<StreamEvent.StreamEnd>(data)
             "error" -> JSON.decodeFromString<StreamEvent.Error>(data)
             else -> StreamEvent.Unknown(eventName, data, streamId)
+        }
+    }
+
+    /**
+     * Infer the SSE event type from the data content when the server
+     * doesn't set the `event:` field.
+     *
+     * hermes-webui sends events as JSON objects. The event type can be:
+     *  1. A `type` field in the JSON (e.g. `{"type": "token", ...}`)
+     *  2. Inferred from the presence of known field names:
+     *     - `"token"` field → "token" event
+     *     - `"reasoning"` field → "reasoning" event
+     *     - `"title"` field → "title" event
+     *     - `"stream_id"` only (no other known field) → likely "stream_end"
+     *       or "done"
+     *  3. Returns null if we can't infer it
+     */
+    private fun inferEventType(data: String): String? {
+        // Quick string checks (faster than JSON parsing for the common case)
+        return when {
+            data.contains("\"token\"") -> "token"
+            data.contains("\"reasoning\"") -> "reasoning"
+            data.contains("\"title\"") -> "title"
+            data.contains("\"tool_call\"") || data.contains("\"tool\"") -> "tool"
+            data.contains("\"tool_complete\"") || data.contains("\"result\"") -> "tool_complete"
+            data.contains("\"error\"") -> "error"
+            // stream_end and done events typically just have {"stream_id": "..."}
+            // We can't distinguish them reliably, so treat as stream_end
+            // (the safer option — triggers completion).
+            data.contains("\"stream_id\"") && !data.contains("\"token\"") -> "stream_end"
+            else -> null
         }
     }
 
