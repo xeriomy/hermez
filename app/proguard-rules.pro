@@ -24,9 +24,12 @@
 -dontwarn kotlinx.serialization.**
 
 # --- Ktor (3.x) -------------------------------------------------------------
-# Ktor uses reflection & service loaders for engine discovery.
--keep class io.ktor.** { *; }
--keepnames class io.ktor.** { *; }
+# SEC-7 fix: narrowed from -keep class io.ktor.** { *; } to only keep
+# what's actually needed — service loader entries for engine discovery.
+# The blanket keep was defeating R8's tree-shaking.
+-keep class io.ktor.client.engine.** { *; }
+-keep class io.ktor.client.plugins.**$Companion { *; }
+-keepnames class io.ktor.client.plugins.sse.** { *; }
 -dontwarn io.ktor.**
 -dontwarn org.slf4j.impl.**
 -dontwarn org.slf4j.LoggerFactory
@@ -43,10 +46,11 @@
 -dontwarn androidx.room.**
 
 # --- Jetpack Compose --------------------------------------------------------
-# Compose runtime keeps its own metadata; the compiler plugin already emits
-# the necessary keep rules. We disable aggressive optimization on lambda
-# classes to avoid crashes when navigating between screens.
--keep class androidx.compose.** { *; }
+# SEC-7 fix: narrowed from -keep class androidx.compose.** { *; }
+# Compose compiler plugin already emits necessary keep rules.
+# Only keep runtime + material3 internals that use reflection.
+-keep class androidx.compose.runtime.** { *; }
+-keep class androidx.compose.material3.** { *; }
 -dontwarn androidx.compose.**
 
 # --- App -------------------------------------------------------------------

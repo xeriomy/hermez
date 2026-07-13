@@ -43,6 +43,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.hermes.core.data.SessionRepository
 import dev.hermes.core.data.local.SessionEntity
+import dev.hermes.hermex.ui.util.formatTimestamp
 import kotlinx.coroutines.launch
 
 /**
@@ -238,9 +239,4 @@ private fun ArchivedSessionItem(
             )
         }
     }
-}
-
-private fun formatTimestamp(timestamp: Long): String {
-    val date = java.util.Date(timestamp)
-    return java.text.SimpleDateFormat("MMM d, HH:mm", java.util.Locale.getDefault()).format(date)
 }
