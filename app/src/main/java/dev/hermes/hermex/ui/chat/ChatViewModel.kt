@@ -141,37 +141,6 @@ class ChatViewModel(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
 
     // ------------------------------------------------------------------
-    // Backward-compat shims for the old ChatScreen API
-    // ------------------------------------------------------------------
-    // These exist ONLY so the build stays green between this commit
-    // (commit 5 — ViewModel rewrite) and commit 6 (ChatScreen rewrite).
-    // Commit 6 will switch ChatScreen to read [streamState] directly
-    // and these shims will be deleted.
-    //
-    // Do NOT use these in new code — read [streamState] instead.
-
-    @Deprecated("Read streamState as? StreamState.Streaming instead. Removed in commit 6.")
-    val streamingContent: StateFlow<String> = _streamState
-        .map { state ->
-            when (state) {
-                is StreamState.Streaming -> state.content.toString()
-                is StreamState.Completing -> ""  // brief gap — commit 6 fixes the flicker
-                else -> ""
-            }
-        }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
-
-    @Deprecated("Read streamState as? StreamState.Streaming instead. Removed in commit 6.")
-    val streamingReasoning: StateFlow<String> = _streamState
-        .map { (it as? StreamState.Streaming)?.reasoning?.toString() ?: "" }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
-
-    @Deprecated("Read streamState as? StreamState.Streaming instead. Removed in commit 6.")
-    val streamingTools: StateFlow<List<ToolCallInfo>> = _streamState
-        .map { (it as? StreamState.Streaming)?.tools ?: emptyList() }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
-
-    // ------------------------------------------------------------------
     // Pending messages (optimistic UI, NOT in Room)
     // ------------------------------------------------------------------
 
