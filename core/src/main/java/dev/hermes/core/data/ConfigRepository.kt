@@ -63,7 +63,9 @@ class ConfigRepository(app: Application) : AndroidViewModel(app) {
                         val body = response.body<ModelsResponse>()
                         _models.value = body.models?.map { it.toOption() } ?: emptyList()
                     }
-                } catch (_: Exception) { /* models are optional */ }
+                } catch (e: Exception) {
+                    android.util.Log.w("ConfigRepository", "Failed to fetch models", e)
+                }
             }
 
             val workspacesDeferred = async {
@@ -73,7 +75,9 @@ class ConfigRepository(app: Application) : AndroidViewModel(app) {
                         val body = response.body<WorkspacesResponse>()
                         _workspaces.value = body.workspaces ?: emptyList()
                     }
-                } catch (_: Exception) { }
+                } catch (e: Exception) {
+                    android.util.Log.w("ConfigRepository", "Failed to fetch workspaces", e)
+                }
             }
 
             val profilesDeferred = async {
@@ -83,7 +87,9 @@ class ConfigRepository(app: Application) : AndroidViewModel(app) {
                         val body = response.body<ProfilesResponse>()
                         _profiles.value = body.profiles ?: emptyList()
                     }
-                } catch (_: Exception) { }
+                } catch (e: Exception) {
+                    android.util.Log.w("ConfigRepository", "Failed to fetch profiles", e)
+                }
             }
 
             // Wait for all three to complete

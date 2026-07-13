@@ -32,7 +32,9 @@ android {
 
 dependencies {
     // Networking (Ktor 3.x — ktor-client-sse was renamed to ktor-sse)
-    implementation("io.ktor:ktor-client-core:3.0.3")
+    // ARCH-3 fix: ktor-client-core is 'api' because ChatStream's public API
+    // references HttpClient types. app module shouldn't need to redeclare it.
+    api("io.ktor:ktor-client-core:3.0.3")
     implementation("io.ktor:ktor-client-okhttp:3.0.3")
     implementation("io.ktor:ktor-client-content-negotiation:3.0.3")
     implementation("io.ktor:ktor-serialization-kotlinx-json:3.0.3")

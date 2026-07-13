@@ -84,7 +84,20 @@ class WorkspaceRepository(app: Application) : AndroidViewModel(app) {
                 else -> "Failed to read file (${response.status})."
             })
         }
-        response.bodyAsText()
+        // PERF-5 fix: cap preview at 1 MB to prevent OOM on large files.
+        val contentLength = response.headers[io.ktor.http.HttpHeaders.ContentLength]?.toLongOrNull()
+        if (contentLength != null && contentLength > MAX_PREVIEW_SIZE) {
+            throw Exception("File is too large to preview (${contentLength / 1024} KB). Max preview size is ${MAX_PREVIEW_SIZE / 1024} KB.")
+        }
+        val text = response.bodyAsText()
+        if (text.length > MAX_PREVIEW_SIZE) {
+            throw Exception("File is too large to preview. Max preview size is ${MAX_PREVIEW_SIZE / 1024} KB.")
+        }
+        text
+    }
+
+    companion object {
+        private const val MAX_PREVIEW_SIZE = 1_048_576L  // 1 MB
     }
 
     // --- DTOs ---

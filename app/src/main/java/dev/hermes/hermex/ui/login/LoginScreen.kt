@@ -80,6 +80,22 @@ fun LoginScreen(
     val scope = rememberCoroutineScope()
     val canSubmit = serverUrl.trim().isNotEmpty() && !isTesting && !isConnecting
 
+    // SEC-9: basic URL validation — show error if it doesn't look like a URL
+    val isUrlValid = try {
+        val normalized = dev.hermes.core.network.SharedHttpClient.normalizeUrl(serverUrl.trim())
+        val parsed = io.ktor.http.URLBuilder(normalized).build()
+        parsed.protocol.name == "http" || parsed.protocol.name == "https"
+    } catch (_: Exception) {
+        false
+    }
+    val showUrlError = serverUrl.trim().isNotEmpty() && !isUrlValid
+
+    // SEC-10: warn when password will be sent over plain HTTP
+    val isHttpUrl = serverUrl.trim().let {
+        val normalized = dev.hermes.core.network.SharedHttpClient.normalizeUrl(it)
+        normalized.startsWith("http://") && !normalized.startsWith("https://")
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -130,8 +146,33 @@ fun LoginScreen(
                 keyboardOptions = KeyboardOptions(
                     keyboardType = KeyboardType.Uri,
                     imeAction = ImeAction.Next
-                )
+                ),
+                isError = showUrlError,
+                supportingText = if (showUrlError) {
+                    { Text("That doesn't look like a valid URL") }
+                } else null
             )
+
+            // SEC-10: warn when password will be sent over plain HTTP
+            if (isHttpUrl && !showUrlError) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Error,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Text(
+                        text = "Your password will be sent in plain text. Use https:// or a TLS tunnel.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+            }
 
             // --- Password field --------------------------------------------
             OutlinedTextField(

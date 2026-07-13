@@ -56,16 +56,15 @@ fun FilePreviewScreen(
     LaunchedEffect(filePath) {
         isLoading = true
         errorMessage = null
-        val scope = kotlinx.coroutines.MainScope()
-        scope.launch {
-            val result = workspaceRepository.readFile(sessionId, filePath)
-            result.onSuccess { content ->
-                fileContent = content
-            }.onFailure { e ->
-                errorMessage = e.message ?: "Failed to read file"
-            }
-            isLoading = false
+        // QUAL-4 fix: use the LaunchedEffect's own coroutine scope instead
+        // of creating a MainScope() that leaks when the composable leaves.
+        val result = workspaceRepository.readFile(sessionId, filePath)
+        result.onSuccess { content ->
+            fileContent = content
+        }.onFailure { e ->
+            errorMessage = e.message ?: "Failed to read file"
         }
+        isLoading = false
     }
 
     Scaffold(
