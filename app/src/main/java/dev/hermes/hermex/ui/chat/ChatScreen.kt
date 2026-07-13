@@ -25,6 +25,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Menu
@@ -63,6 +64,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -101,6 +103,8 @@ fun ChatScreen(
     val messages by chatViewModel.messages.collectAsStateWithLifecycle()
     val isStreaming by chatViewModel.isStreaming.collectAsStateWithLifecycle()
     val streamingContent by chatViewModel.streamingContent.collectAsStateWithLifecycle()
+    val streamingReasoning by chatViewModel.streamingReasoning.collectAsStateWithLifecycle()
+    val streamingTools by chatViewModel.streamingTools.collectAsStateWithLifecycle()
     val error by chatViewModel.error.collectAsStateWithLifecycle()
     val remainingToLoad by chatViewModel.remainingToLoad.collectAsStateWithLifecycle()
     val isInitialLoading by chatViewModel.isInitialLoading.collectAsStateWithLifecycle()
@@ -227,6 +231,20 @@ fun ChatScreen(
 
             items(messages) { msg ->
                 MessageBubble(message = msg)
+            }
+
+            // QUAL-5: Show reasoning block while streaming
+            if (isStreaming && streamingReasoning.isNotEmpty()) {
+                item {
+                    ReasoningBubble(content = streamingReasoning)
+                }
+            }
+
+            // QUAL-5: Show tool call cards while streaming
+            if (isStreaming && streamingTools.isNotEmpty()) {
+                items(streamingTools) { tool ->
+                    ToolCallCard(tool = tool)
+                }
             }
 
             // PERF-1 fix: while streaming, show the partial response as
@@ -477,6 +495,88 @@ fun ChatScreen(
  * on every token. When streaming ends, the full message appears in the
  * messages list via Room observer with full Markdown rendering.
  */
+/**
+ * QUAL-5: Reasoning bubble — shows the agent's reasoning/thinking text
+ * in a subtly different card (lower opacity, italic) while streaming.
+ */
+@Composable
+fun ReasoningBubble(content: String) {
+    Box(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+        contentAlignment = Alignment.CenterStart
+    ) {
+        Card(
+            modifier = Modifier.fillMaxWidth(0.85f).padding(vertical = 4.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+            )
+        ) {
+            Column(modifier = Modifier.padding(12.dp)) {
+                Text(
+                    text = "Thinking…",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontWeight = FontWeight.Medium
+                )
+                Spacer(modifier = Modifier.size(4.dp))
+                Text(
+                    text = content,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+/**
+ * QUAL-5: Tool call card — shows a tool name + args + result (when
+ * complete) as a compact card while the agent is working.
+ */
+@Composable
+fun ToolCallCard(tool: ToolCallInfo) {
+    Card(
+        modifier = Modifier.fillMaxWidth(0.85f).padding(horizontal = 4.dp, vertical = 2.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+        )
+    ) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Default.Build,
+                contentDescription = null,
+                modifier = Modifier.size(16.dp),
+                tint = MaterialTheme.colorScheme.primary
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = tool.name,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontWeight = FontWeight.Medium
+                )
+                if (tool.result != null) {
+                    Text(
+                        text = "✓ Done",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                } else {
+                    Text(
+                        text = "Running…",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+    }
+}
+
 @Composable
 fun StreamingBubble(content: String) {
     Box(

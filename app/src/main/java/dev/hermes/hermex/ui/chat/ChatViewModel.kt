@@ -58,6 +58,20 @@ class ChatViewModel(
     private val _streamingContent = MutableStateFlow("")
     val streamingContent: StateFlow<String> = _streamingContent.asStateFlow()
 
+    /**
+     * QUAL-5: Holds streaming reasoning text (shown in a collapsible block
+     * above the assistant response while streaming). Cleared on stream end.
+     */
+    private val _streamingReasoning = MutableStateFlow("")
+    val streamingReasoning: StateFlow<String> = _streamingReasoning.asStateFlow()
+
+    /**
+     * QUAL-5: Holds tool calls happening during streaming (shown as small
+     * cards). Cleared on stream end.
+     */
+    private val _streamingTools = MutableStateFlow<List<ToolCallInfo>>(emptyList())
+    val streamingTools: StateFlow<List<ToolCallInfo>> = _streamingTools.asStateFlow()
+
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 
@@ -227,7 +241,9 @@ class ChatViewModel(
         files: List<String>? = null
     ) {
         _isStreaming.value = true
-        _streamingContent.value = ""  // clear any previous streaming content
+        _streamingContent.value = ""
+        _streamingReasoning.value = ""  // QUAL-5: clear previous reasoning
+        _streamingTools.value = emptyList()  // QUAL-5: clear previous tools
 
         // Track the user message and assistant message so we can persist
         // them to Room when the stream completes (BUG-2 fix).
@@ -272,22 +288,37 @@ class ChatViewModel(
                 chatStream.streamEvents(streamId).collect { event ->
                     when (event) {
                         is ChatStream.StreamEvent.Token -> {
-                            // PERF-1 fix: append to StringBuilder (O(1)) and
-                            // update the separate streamingContent StateFlow.
-                            // Do NOT modify _messages — no list copy, no
-                            // Markdown re-parse. The UI shows this as plain
-                            // Text while streaming.
                             assistantContent.append(event.token)
                             _streamingContent.value = assistantContent.toString()
                         }
+                        is ChatStream.StreamEvent.Reasoning -> {
+                            // QUAL-5: show reasoning text in a separate block
+                            _streamingReasoning.value += event.text
+                        }
+                        is ChatStream.StreamEvent.Tool -> {
+                            // QUAL-5: show tool call as a card
+                            _streamingTools.value = _streamingTools.value + ToolCallInfo(
+                                name = event.name,
+                                args = event.args,
+                                result = null
+                            )
+                        }
+                        is ChatStream.StreamEvent.ToolComplete -> {
+                            // QUAL-5: update the last tool call with its result
+                            val tools = _streamingTools.value.toMutableList()
+                            val lastToolIndex = tools.indexOfLast { it.name == event.name && it.result == null }
+                            if (lastToolIndex >= 0) {
+                                tools[lastToolIndex] = tools[lastToolIndex].copy(result = event.result)
+                            }
+                            _streamingTools.value = tools
+                        }
+                        is ChatStream.StreamEvent.Title -> {
+                            // QUAL-5: could update the TopAppBar title — for now
+                            // just log it (the session list will pick it up on refresh)
+                            android.util.Log.d("ChatViewModel", "Session title updated: ${event.title}")
+                        }
                         is ChatStream.StreamEvent.Done -> Unit
                         is ChatStream.StreamEvent.StreamEnd -> {
-                            // BUG-6 fix: StreamEnd is the authoritative "we
-                            // are done" signal. Throw to exit the collect loop
-                            // immediately — don't wait for the SSE connection
-                            // to close (some servers keep it open for reuse).
-                            // The catch block suppresses this exception; the
-                            // finally block handles persistence + cleanup.
                             throw StreamEndSignal()
                         }
                         is ChatStream.StreamEvent.Error -> {
@@ -322,8 +353,9 @@ class ChatViewModel(
                     }
                 }
                 _isStreaming.value = false
-                _streamingContent.value = ""  // clear streaming text — the
-                // final message will appear in _messages via Room observer
+                _streamingContent.value = ""  // clear streaming text
+                _streamingReasoning.value = ""  // QUAL-5: clear reasoning
+                _streamingTools.value = emptyList()  // QUAL-5: clear tools
                 streamJob = null
             }
         }
@@ -348,3 +380,13 @@ class ChatViewModel(
  * that the stream is done. (BUG-6 fix)
  */
 private class StreamEndSignal : Exception()
+
+/**
+ * QUAL-5: Represents a tool call during streaming.
+ * Shown as a small card in the chat UI while the agent is working.
+ */
+data class ToolCallInfo(
+    val name: String,
+    val args: String,
+    val result: String?
+)
