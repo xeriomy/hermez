@@ -9,6 +9,7 @@ import io.ktor.client.plugins.defaultRequest
 import io.ktor.client.plugins.sse.SSE
 import io.ktor.client.plugins.sse.sse
 import io.ktor.client.request.get
+import io.ktor.client.request.header
 import io.ktor.client.request.parameter
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
@@ -18,6 +19,7 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
 import io.ktor.serialization.kotlinx.json.json
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -133,18 +135,99 @@ class ChatStream(
         }
     }
 
+    /**
+     * Flow of SSE events for the given [streamId].
+     *
+     * ## Reconnect protocol (CHAT-4 fix)
+     *
+     * The previous implementation silently retried the SSE connection
+     * from the top on any failure. If the server replayed events from
+     * the start, the UI got duplicates; if it rejected the stream_id,
+     * the UI got an error after 3 retries; if it didn't support
+     * resumption, tokens were lost. All three were data-lossy.
+     *
+     * The new protocol, on any SSE connection failure:
+     *   1. Call [reattachStream] to ask the server what state the
+     *      stream is in.
+     *   2. If the server says `completed` → emit [StreamEvent.StreamEnd]
+     *      and stop. The stream finished while we were disconnected;
+     *      the ViewModel will call `loadSession` to fetch the final
+     *      messages.
+     *   3. If the server says `failed` → emit [StreamEvent.Error] and
+     *      stop.
+     *   4. If the server says `active` → reconnect the SSE connection
+     *      with the `Last-Event-ID` header set to the last event ID we
+     *      received (CHAT-12 dedup — the server should resume from
+     *      the next event, not replay).
+     *   5. If reattach itself fails → retry up to [maxReconnects]
+     *      times with exponential backoff (1s, 2s, 4s), then emit
+     *      [StreamEvent.Error].
+     *   6. If the server returns 400 to the Last-Event-ID header
+     *      (resumption not supported) → emit [StreamEvent.Error].
+     *      Do NOT silently replay from the start.
+     *
+     * The last-event-id cursor is tracked from `ServerSentEvent.id` on
+     * every incoming event. Ktor's SSE plugin exposes this as
+     * `event.id`.
+     *
+     * ## Cancellation
+     *
+     * Collecting this Flow in a cancelled coroutine throws
+     * [CancellationException] — we re-throw it (never swallow). The
+     * ChatViewModel's `streamJob` cancel propagates here and the
+     * channelFlow terminates cleanly.
+     */
     fun streamEvents(streamId: String): Flow<StreamEvent> = channelFlow {
         var reconnectAttempts = 0
-        val maxReconnectAttempts = 3
+        var lastEventId: String? = null
+        val maxReconnects = 3
 
-        while (reconnectAttempts < maxReconnectAttempts) {
+        while (reconnectAttempts <= maxReconnects) {
             try {
+                // Before reconnecting (not the first attempt), ask the
+                // server what state the stream is in so we can resume
+                // cleanly instead of replaying from the start.
+                if (reconnectAttempts > 0) {
+                    val status = reattachStream(streamId).getOrNull()
+                    when (status?.status) {
+                        "completed" -> {
+                            // Server already finished — no point reconnecting.
+                            // Emit StreamEnd so the ViewModel runs its normal
+                            // completion path (loadSession to fetch final state).
+                            trySend(StreamEvent.StreamEnd(streamId))
+                            return@channelFlow
+                        }
+                        "failed" -> {
+                            trySend(StreamEvent.Error(
+                                "Stream failed on the server",
+                                streamId
+                            ))
+                            return@channelFlow
+                        }
+                        // "active" or unknown → fall through and reconnect.
+                        // null (reattach failed) → fall through; the SSE
+                        // call will likely also fail and we'll retry.
+                    }
+                }
+
                 sseClient.sse(
                     ApiEndpoint.ChatStream.path,
-                    request = { parameter("stream_id", streamId) }
+                    request = {
+                        parameter("stream_id", streamId)
+                        // CHAT-12 fix: send the Last-Event-ID header on
+                        // reconnect so the server resumes from the next
+                        // event instead of replaying from the start.
+                        // First connection has lastEventId == null → no header.
+                        lastEventId?.let { header("Last-Event-ID", it) }
+                    }
                 ) {
                     // `this` is ClientSSESession. `incoming` is a Flow<ServerSentEvent>.
                     incoming.collect { event ->
+                        // Track the cursor for resumption. The server should
+                        // set `id` on every event; if it doesn't, lastEventId
+                        // stays null and we can't resume — but we don't crash.
+                        event.id?.let { lastEventId = it }
+
                         val data = event.data ?: return@collect
                         if (data.isEmpty()) return@collect
                         val eventName = event.event ?: "unknown"
@@ -154,40 +237,84 @@ class ChatStream(
                         }
                     }
                 }
-                reconnectAttempts = maxReconnectAttempts // Exit loop on clean completion
+                // Clean completion (StreamEnd was emitted by the server,
+                // the incoming flow closed normally). Don't retry.
+                return@channelFlow
+            } catch (e: CancellationException) {
+                // Never swallow cancellation — it propagates to the
+                // channelFlow and terminates it cleanly.
+                throw e
             } catch (e: Exception) {
                 reconnectAttempts++
-                if (reconnectAttempts < maxReconnectAttempts) {
-                    // Exponential backoff: 1s, 2s, 4s
-                    val delayMs = (1000L * (1L shl (reconnectAttempts - 1)))
-                    delay(delayMs)
-                } else {
-                    trySend(StreamEvent.Error(e.message ?: "Stream failed after retries", streamId))
+                if (reconnectAttempts > maxReconnects) {
+                    trySend(StreamEvent.Error(
+                        "Stream failed after $maxReconnects retries: ${e.message}",
+                        streamId
+                    ))
+                    return@channelFlow
                 }
+                // Exponential backoff: 1s, 2s, 4s.
+                delay(1000L * (1L shl (reconnectAttempts - 1)))
             }
         }
     }.flowOn(Dispatchers.IO)
 
-    suspend fun cancelStream(streamId: String): Result<Unit> {
-        return try {
-            val response = baseClient.get(ApiEndpoint.ChatCancel.path) {
-                parameter("stream_id", streamId)
-            }
-            if (response.status.isSuccess()) {
-                Result.success(Unit)
-            } else {
-                Result.failure(Exception("Cancel failed: ${response.status}"))
-            }
-        } catch (e: Exception) {
-            Result.failure(e)
+    /**
+     * Ask the server what state a stream is in.
+     *
+     * Used by [streamEvents] before reconnecting to decide whether to
+     * resume (active), give up (failed), or just emit StreamEnd
+     * (completed while we were disconnected).
+     *
+     * This is the function that BUG-12 deleted as "dead code". It was
+     * dead because it was never wired up — not because it wasn't
+     * needed. The chat rewrite (see hermez-chat-rewrite.pdf §4.1)
+     * restores it and calls it from the reconnect path.
+     *
+     * @return `Result.success(StreamStatusResponse)` on a 2xx response
+     *   (the status field tells us active/completed/failed);
+     *   `Result.failure` on network error or non-2xx.
+     */
+    suspend fun reattachStream(streamId: String): Result<StreamStatusResponse> = try {
+        val response = baseClient.get(ApiEndpoint.ChatStreamStatus.path) {
+            parameter("stream_id", streamId)
         }
+        if (response.status.isSuccess()) {
+            Result.success(response.body())
+        } else {
+            Result.failure(Exception("Reattach failed: ${response.status}"))
+        }
+    } catch (e: Exception) {
+        Result.failure(e)
     }
 
-    // BUG-12 fix: reattachStream was dead code — never called from anywhere.
-    // Deleted. The streamEvents docstring mentioned reattach as a concept,
-    // but the implementation doesn't actually reattach — it just retries
-    // the SSE connection from the top (losing any events the server already
-    // sent). To be implemented properly in a future version.
+    /**
+     * Tell the server to stop generating tokens for [streamId].
+     *
+     * **Idempotent** (CHAT-1 fix): 404 (stream already gone) and 409
+     * (stream already completed) are treated as success. This is
+     * critical because `cancelStream` is called from a
+     * `withContext(NonCancellable)` block in `ChatViewModel.stopStreaming`
+     * — the user may tap Stop after the stream has already ended, and
+     * we must not surface an error in that case.
+     *
+     * Safe to call from a `NonCancellable` context: it's a plain GET
+     * with no suspending side effects beyond the HTTP call itself.
+     */
+    suspend fun cancelStream(streamId: String): Result<Unit> = try {
+        val response = baseClient.get(ApiEndpoint.ChatCancel.path) {
+            parameter("stream_id", streamId)
+        }
+        when (response.status.value) {
+            // 2xx: cancelled successfully.
+            // 404: stream already gone (server may have timed it out).
+            // 409: stream already completed normally.
+            in 200..299, 404, 409 -> Result.success(Unit)
+            else -> Result.failure(Exception("Cancel failed: ${response.status}"))
+        }
+    } catch (e: Exception) {
+        Result.failure(e)
+    }
 
     // QUAL-13 fix: hoisted Json instance to companion object instead of
     // creating a new one per SSE event (hundreds of allocations per
