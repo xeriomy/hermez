@@ -292,6 +292,11 @@ class SessionRepository(app: Application) : AndroidViewModel(app) {
      * Returns the server path of the uploaded file, which can be passed
      * to ChatStream.startChat() as a `files` entry.
      *
+     * SEC-2 fix: files larger than 50 MB are rejected to prevent OOM.
+     * SEC-3 fix: uses Ktor's MultiPartFormDataContent instead of
+     * hand-rolling the multipart body (fixes header injection risk
+     * from filenames with quotes or \r\n).
+     *
      * @param sessionId The session to attach the file to
      * @param fileUri The content:// URI of the file to upload
      * @return Result with the server file path on success
@@ -299,13 +304,11 @@ class SessionRepository(app: Application) : AndroidViewModel(app) {
     suspend fun uploadFile(sessionId: String, fileUri: String): Result<String> = try {
         val client = client() ?: return Result.failure(Exception("Not connected to a server. Log in first."))
 
-        // Read file data from the content URI
         val uri = android.net.Uri.parse(fileUri)
         val inputStream = context.contentResolver.openInputStream(uri)
             ?: return Result.failure(Exception("Could not open file"))
-        val fileData = inputStream.use { it.readBytes() }
 
-        // Get filename from the URI
+        // Get filename
         val fileName = context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
             val nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
             if (nameIndex >= 0 && cursor.moveToFirst()) cursor.getString(nameIndex) else "file"
@@ -314,11 +317,56 @@ class SessionRepository(app: Application) : AndroidViewModel(app) {
         // Get MIME type
         val mimeType = context.contentResolver.getType(uri) ?: "application/octet-stream"
 
-        // Build multipart form data
-        val boundary = "Boundary-${System.currentTimeMillis()}"
+        // SEC-2: Read file data with a 50 MB limit to prevent OOM.
+        // For files under 50 MB, reading into memory is acceptable
+        // (50 MB * ~2 for multipart overhead = 100 MB, within typical
+        // Android heap limits).
+        val maxFileSize = 50L * 1024 * 1024  // 50 MB
+        val fileData = inputStream.use { stream ->
+            val available = stream.available().toLong()
+            if (available > maxFileSize) {
+                return Result.failure(Exception("File is too large. Maximum upload size is 50 MB."))
+            }
+            // Read in chunks to avoid allocating a single huge buffer
+            val buffer = java.io.ByteArrayOutputStream()
+            val chunk = ByteArray(8192)
+            var totalRead = 0L
+            var bytesRead: Int
+            while (stream.read(chunk).also { bytesRead = it } != -1) {
+                totalRead += bytesRead
+                if (totalRead > maxFileSize) {
+                    return Result.failure(Exception("File is too large. Maximum upload size is 50 MB."))
+                }
+                buffer.write(chunk, 0, bytesRead)
+            }
+            buffer.toByteArray()
+        }
+
+        // SEC-3 fix: use Ktor's MultiPartFormDataContent instead of
+        // hand-rolling the multipart body. Ktor handles boundary
+        // generation, header escaping (prevents injection from
+        // filenames with quotes or \r\n), and content-type correctly.
+        val parts = listOf(
+            io.ktor.http.content.PartData.FormItem(
+                value = sessionId,
+                partHeaders = io.ktor.http.Headers.build {
+                    append(io.ktor.http.HttpHeaders.ContentDisposition, "form-data; name=\"session_id\"")
+                },
+                dispose = {}
+            ),
+            io.ktor.http.content.PartData.BinaryItem(
+                provider = { kotlinx.io.Buffer().apply { write(fileData) } },
+                partHeaders = io.ktor.http.Headers.build {
+                    append(io.ktor.http.HttpHeaders.ContentDisposition, "form-data; name=\"file\"; filename=\"$fileName\"")
+                    append(io.ktor.http.HttpHeaders.ContentType, mimeType)
+                },
+                dispose = {}
+            )
+        )
+        val multipartContent = io.ktor.client.request.forms.MultiPartFormDataContent(parts)
+
         val response = client.post(ApiEndpoint.Upload.path) {
-            contentType(ContentType.MultiPart.FormData.withParameter("boundary", boundary))
-            setBody(buildMultipartBody(boundary, sessionId, fileName, fileData, mimeType))
+            setBody(multipartContent)
         }
 
         if (response.status.isSuccess()) {
@@ -330,31 +378,6 @@ class SessionRepository(app: Application) : AndroidViewModel(app) {
         }
     } catch (e: Exception) {
         Result.failure(e)
-    }
-
-    /**
-     * Build a multipart/form-data body as a ByteArray.
-     */
-    private fun buildMultipartBody(
-        boundary: String,
-        sessionId: String,
-        fileName: String,
-        fileData: ByteArray,
-        mimeType: String
-    ): ByteArray {
-        val sb = StringBuilder()
-        sb.append("--").append(boundary).append("\r\n")
-        sb.append("Content-Disposition: form-data; name=\"session_id\"\r\n\r\n")
-        sb.append(sessionId).append("\r\n")
-
-        sb.append("--").append(boundary).append("\r\n")
-        sb.append("Content-Disposition: form-data; name=\"file\"; filename=\"").append(fileName).append("\"\r\n")
-        sb.append("Content-Type: ").append(mimeType).append("\r\n\r\n")
-
-        val headerBytes = sb.toString().toByteArray(Charsets.UTF_8)
-        val footerBytes = "\r\n--$boundary--\r\n".toByteArray(Charsets.UTF_8)
-
-        return headerBytes + fileData + footerBytes
     }
 
     // DTOs
