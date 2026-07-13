@@ -180,31 +180,26 @@ class ChatStream(
         }
     }
 
-    suspend fun reattachStream(streamId: String): Result<StreamStatusResponse> {
-        return try {
-            val response = baseClient.get("${ApiEndpoint.ChatStreamStatus.path}?stream_id=$streamId")
-            if (response.status.isSuccess()) {
-                Result.success(response.body())
-            } else {
-                Result.failure(Exception("Reattach failed: ${response.status}"))
-            }
-        } catch (e: Exception) {
-            Result.failure(e)
-        }
-    }
+    // BUG-12 fix: reattachStream was dead code — never called from anywhere.
+    // Deleted. The streamEvents docstring mentioned reattach as a concept,
+    // but the implementation doesn't actually reattach — it just retries
+    // the SSE connection from the top (losing any events the server already
+    // sent). To be implemented properly in a future version.
 
+    // QUAL-13 fix: hoisted Json instance to companion object instead of
+    // creating a new one per SSE event (hundreds of allocations per
+    // streaming response).
     private fun parseSseEvent(eventName: String, data: String, streamId: String): StreamEvent? {
-        val json = Json { ignoreUnknownKeys = true }
         return when (eventName) {
-            "token" -> json.decodeFromString<StreamEvent.Token>(data)
-            "tool" -> json.decodeFromString<StreamEvent.Tool>(data)
-            "tool_complete" -> json.decodeFromString<StreamEvent.ToolComplete>(data)
-            "reasoning" -> json.decodeFromString<StreamEvent.Reasoning>(data)
-            "title" -> json.decodeFromString<StreamEvent.Title>(data)
-            "done" -> json.decodeFromString<StreamEvent.Done>(data)
-            "interim_assistant" -> json.decodeFromString<StreamEvent.InterimAssistant>(data)
-            "stream_end" -> json.decodeFromString<StreamEvent.StreamEnd>(data)
-            "error" -> json.decodeFromString<StreamEvent.Error>(data)
+            "token" -> JSON.decodeFromString<StreamEvent.Token>(data)
+            "tool" -> JSON.decodeFromString<StreamEvent.Tool>(data)
+            "tool_complete" -> JSON.decodeFromString<StreamEvent.ToolComplete>(data)
+            "reasoning" -> JSON.decodeFromString<StreamEvent.Reasoning>(data)
+            "title" -> JSON.decodeFromString<StreamEvent.Title>(data)
+            "done" -> JSON.decodeFromString<StreamEvent.Done>(data)
+            "interim_assistant" -> JSON.decodeFromString<StreamEvent.InterimAssistant>(data)
+            "stream_end" -> JSON.decodeFromString<StreamEvent.StreamEnd>(data)
+            "error" -> JSON.decodeFromString<StreamEvent.Error>(data)
             else -> StreamEvent.Unknown(eventName, data, streamId)
         }
     }
@@ -234,6 +229,12 @@ class ChatStream(
         val status: String, // "active" | "completed" | "failed"
         val session_id: String?
     )
+
+    companion object {
+        // QUAL-13 fix: single Json instance reused across all SSE event
+        // parsing. Previously a new Json instance was allocated per event.
+        private val JSON = Json { ignoreUnknownKeys = true }
+    }
 }
 
 /**

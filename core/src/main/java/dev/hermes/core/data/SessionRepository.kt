@@ -247,7 +247,8 @@ class SessionRepository(app: Application) : AndroidViewModel(app) {
     suspend fun setPinned(sessionId: String, pinned: Boolean): Result<Unit> = try {
         // Optimistic update: update Room FIRST so the UI reflects the change
         // immediately. Pinning is local-only state (the server may not support
-        // it), so we don't roll back if the server call fails.
+        // it), so we don't roll back if the server call fails — but we DO
+        // log the failure so it's visible during development. (QUAL-7 fix)
         db.sessionDao().setPinned(sessionId, pinned)
 
         val client = client() ?: return Result.success(Unit)
@@ -258,12 +259,16 @@ class SessionRepository(app: Application) : AndroidViewModel(app) {
         if (response.status.isSuccess()) {
             Result.success(Unit)
         } else {
-            // Server failed but local state is already updated — don't punish
-            // the user for a server-side issue
+            // Server failed but local state is already updated. Log it so
+            // a 401 (session expired) isn't silently swallowed.
+            android.util.Log.w("SessionRepository",
+                "setPinned server call failed: ${response.status} (local state preserved)")
             Result.success(Unit)
         }
     } catch (e: Exception) {
-        Result.success(Unit) // local update already happened
+        android.util.Log.w("SessionRepository",
+            "setPinned server call threw: ${e.message} (local state preserved)")
+        Result.success(Unit)
     }
 
     suspend fun setArchived(sessionId: String, archived: Boolean): Result<Unit> = try {
@@ -278,9 +283,13 @@ class SessionRepository(app: Application) : AndroidViewModel(app) {
         if (response.status.isSuccess()) {
             Result.success(Unit)
         } else {
+            android.util.Log.w("SessionRepository",
+                "setArchived server call failed: ${response.status} (local state preserved)")
             Result.success(Unit)
         }
     } catch (e: Exception) {
+        android.util.Log.w("SessionRepository",
+            "setArchived server call threw: ${e.message} (local state preserved)")
         Result.success(Unit)
     }
 

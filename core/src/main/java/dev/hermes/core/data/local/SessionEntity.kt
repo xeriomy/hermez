@@ -2,10 +2,8 @@ package dev.hermes.core.data.local
 
 import androidx.room.Entity
 import androidx.room.PrimaryKey
-import kotlinx.serialization.Serializable
 
 @Entity(tableName = "sessions")
-@Serializable
 data class SessionEntity(
     @PrimaryKey val sessionId: String,
     val title: String?,
