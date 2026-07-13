@@ -145,6 +145,19 @@ class SessionRepository(app: Application) : AndroidViewModel(app) {
             )
         }
         db.sessionDao().insertSessions(entities)
+
+        // BUG-7 fix: delete sessions that exist locally but not on the server.
+        // This happens when a session is deleted from another client (web UI,
+        // another phone). Without this, deleted sessions stay in the local
+        // cache forever until the user manually deletes them from Hermez.
+        val serverSessionIds = sessions.map { it.session_id }.toSet()
+        val localSessionIds = existingSessions.keys
+        val deletedSessionIds = localSessionIds - serverSessionIds
+        deletedSessionIds.forEach { sessionId ->
+            db.sessionDao().deleteSession(sessionId)
+            db.messageDao().deleteMessagesForSession(sessionId)
+        }
+
         entities
     }
 
