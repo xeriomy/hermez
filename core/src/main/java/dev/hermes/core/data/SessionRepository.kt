@@ -15,6 +15,8 @@ import io.ktor.client.statement.*
 import io.ktor.http.*
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -26,6 +28,28 @@ class SessionRepository(app: Application) {
     private val context = app.applicationContext
     private val db = AppDatabase.getInstance(context)
     init { AuthPrefsRepository.init(context) }
+
+    /**
+     * Serializes concurrent [loadSession] calls for the same session.
+     *
+     * Why: the new ChatViewModel (chat rewrite §5) calls `loadSession`
+     * from two paths that may race:
+     *   1. Normal stream completion → `loadSession` to fetch the
+     *      server's authoritative version (with real message_ids).
+     *   2. User taps Stop → `loadSession` to fetch whatever the
+     *      server generated before cancellation.
+     *
+     * Without serialization, the two GETs would race and the second
+     * one to write to Room could overwrite the first's writes (or
+     * worse, interleave with another session's loadSession). The
+     * Mutex ensures only one loadSession runs at a time.
+     *
+     * Note: this is a single-process Mutex — sufficient because
+     * Hermez is a single-process app (no multi-process Room access).
+     *
+     * See: hermez-chat-rewrite.pdf §6.2 (Concurrency-safe loadSession).
+     */
+    private val loadSessionLock = Mutex()
 
     /**
      * Borrow the process-wide shared [HttpClient] from [SharedHttpClient].
@@ -74,55 +98,29 @@ class SessionRepository(app: Application) {
 
     /**
      * Persist a locally-sent user message + the assistant's streamed
-     * response to Room. Called when a chat stream completes so the
-     * messages survive navigation away and back.
+     * response to Room.
      *
-     * Uses OnConflictStrategy.REPLACE on messageId so re-inserting
-     * (e.g. when loadSession fetches the same messages from the server)
-     * is a no-op, not a duplicate.
+     * **REMOVED in the chat rewrite (see hermez-chat-rewrite.pdf §6.1).**
+     *
+     * The new architecture is server-authoritative: the client never
+     * invents message IDs. On stream completion, `loadSession`
+     * fetches the server's version (with real `message_id`s) and the
+     * Room Flow observer picks it up automatically.
+     *
+     * Why it was removed: persisting with fake IDs
+     * (`local_user_${...}`, `stream_${...}`) caused CHAT-2
+     * (duplicates every time you navigate away and back — the
+     * server's real IDs didn't match the fake local IDs, so
+     * `REPLACE` on messageId didn't dedup) and CHAT-6 (orphaned
+     * user messages when the stream failed to start — the user
+     * message was persisted even though the server never received
+     * it, creating a local-only row the server didn't know about).
+     *
+     * If you see a compile error referencing this function, the
+     * caller has not been migrated to the new architecture. The
+     * chat rewrite's commit 5 rewrites ChatViewModel to use
+     * `loadSession` for persistence instead.
      */
-    suspend fun persistLocalMessages(
-        sessionId: String,
-        userMessageId: String,
-        userContent: String,
-        userTimestamp: Long,
-        assistantMessageId: String?,
-        assistantContent: String?,
-        assistantTimestamp: Long?
-    ) {
-        db.messageDao().insertMessage(
-            dev.hermes.core.data.local.MessageEntity(
-                sessionId = sessionId,
-                messageId = userMessageId,
-                role = "user",
-                content = userContent,
-                timestamp = userTimestamp,
-                model = null,
-                provider = null,
-                toolCalls = null,
-                reasoning = null,
-                attachments = null,
-                metadata = null
-            )
-        )
-        if (assistantMessageId != null && !assistantContent.isNullOrBlank()) {
-            db.messageDao().insertMessage(
-                dev.hermes.core.data.local.MessageEntity(
-                    sessionId = sessionId,
-                    messageId = assistantMessageId,
-                    role = "assistant",
-                    content = assistantContent,
-                    timestamp = assistantTimestamp ?: System.currentTimeMillis(),
-                    model = null,
-                    provider = null,
-                    toolCalls = null,
-                    reasoning = null,
-                    attachments = null,
-                    metadata = null
-                )
-            )
-        }
-    }
 
     /**
      * Clear ALL locally cached sessions and messages. The server is not
@@ -184,37 +182,46 @@ class SessionRepository(app: Application) {
         entities
     }
 
-    suspend fun loadSession(sessionId: String, msgLimit: Int = 50): Result<SessionEntity> = runCatching {
-        val client = client() ?: throw Exception("Not connected to a server. Log in first.")
-        val response = client.get("${ApiEndpoint.SessionDetail.path}?session_id=$sessionId&messages=1&msg_limit=$msgLimit")
-        if (!response.status.isSuccess()) {
-            throw Exception(when (response.status.value) {
-                401 -> "Session expired. Please log in again."
-                404 -> "Session not found on the server."
-                in 500..599 -> "Server error (${response.status})."
-                else -> "Failed to load session (${response.status})."
-            })
-        }
-        val session = response.body<SessionDetailResponse>().session ?: throw Exception("Session not found")
-        // Preserve local archived/pinned state (same reason as refreshSessions)
-        val existing = db.sessionDao().getSession(sessionId)
-        val entity = session.toEntity().copy(
-            archived = existing?.archived ?: session.archived,
-            pinned = existing?.pinned ?: session.pinned
-        )
-        db.sessionDao().insertSession(entity)
+    suspend fun loadSession(sessionId: String, msgLimit: Int = 50): Result<SessionEntity> =
+        loadSessionLock.withLock {
+            runCatching {
+                val client = client() ?: throw Exception("Not connected to a server. Log in first.")
+                val response = client.get("${ApiEndpoint.SessionDetail.path}?session_id=$sessionId&messages=1&msg_limit=$msgLimit")
+                if (!response.status.isSuccess()) {
+                    throw Exception(when (response.status.value) {
+                        401 -> "Session expired. Please log in again."
+                        404 -> "Session not found on the server."
+                        in 500..599 -> "Server error (${response.status})."
+                        else -> "Failed to load session (${response.status})."
+                    })
+                }
+                val session = response.body<SessionDetailResponse>().session ?: throw Exception("Session not found")
+                // Preserve local archived/pinned state (same reason as refreshSessions)
+                val existing = db.sessionDao().getSession(sessionId)
+                val entity = session.toEntity().copy(
+                    archived = existing?.archived ?: session.archived,
+                    pinned = existing?.pinned ?: session.pinned
+                )
+                db.sessionDao().insertSession(entity)
 
-        // BUG-3 fix: DO NOT delete existing messages before re-inserting.
-        // Now that messageId is the primary key (BUG-4 fix), REPLACE
-        // dedupes correctly — re-inserting the same 50 messages from the
-        // server is a no-op. Older messages that the user previously
-        // loaded via "Load more" stay in the cache. New messages from
-        // the server get added.
-        session.messages?.forEach { msg ->
-            db.messageDao().insertMessage(msg.toEntity(sessionId))
+                // BUG-3 fix: DO NOT delete existing messages before re-inserting.
+                // Now that messageId is the primary key (BUG-4 fix), REPLACE
+                // dedupes correctly — re-inserting the same 50 messages from
+                // the server is a no-op. Older messages that the user previously
+                // loaded via "Load more" stay in the cache. New messages from
+                // the server get added.
+                //
+                // CHAT-2 fix: the server returns real message_ids here. The
+                // old persistLocalMessages path wrote fake IDs
+                // (local_user_*, stream_*) that didn't match — REPLACE didn't
+                // dedup, so both copies coexisted. By removing that path,
+                // there's only one write path, and it uses the server's IDs.
+                session.messages?.forEach { msg ->
+                    db.messageDao().insertMessage(msg.toEntity(sessionId))
+                }
+                entity
+            }
         }
-        entity
-    }
 
     suspend fun createSession(workspace: String?, model: String?, modelProvider: String?, profile: String?): Result<SessionEntity> = try {
         val client = client() ?: return Result.failure(Exception("Not connected to a server. Log in first."))

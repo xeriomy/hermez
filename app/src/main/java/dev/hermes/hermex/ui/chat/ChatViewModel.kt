@@ -335,25 +335,16 @@ class ChatViewModel(
             } catch (e: Exception) {
                 _error.value = friendlyError(e)
             } finally {
-                // BUG-2 fix: persist the user message + assistant response
-                // to Room so they survive navigation away and back.
-                if (userMessage != null) {
-                    try {
-                        sessionRepository.persistLocalMessages(
-                            sessionId = sessionId,
-                            userMessageId = userMessage.messageId,
-                            userContent = userMessage.content,
-                            userTimestamp = userMessage.timestamp,
-                            assistantMessageId = assistantMessageId,
-                            assistantContent = assistantContent.toString().ifBlank { null },
-                            assistantTimestamp = System.currentTimeMillis()
-                        )
-                    } catch (_: Exception) {
-                        // Persistence failure is non-fatal — the messages
-                        // are still in memory and will be re-fetched from
-                        // the server on next loadSession.
-                    }
-                }
+                // CHAT-2/CHAT-6 fix (chat rewrite commit 4): persistLocalMessages
+                // has been removed. The new architecture is server-authoritative:
+                // the next loadSession call fetches the server's version with real
+                // message_ids. The full rewrite in commit 5 wires this up properly
+                // by calling loadSession on stream completion.
+                //
+                // For now (between commit 4 and commit 5), messages from this
+                // stream will appear in the UI only after the next manual
+                // navigation-triggered loadSession — a temporary regression that
+                // commit 5 fixes.
                 _isStreaming.value = false
                 _streamingContent.value = ""  // clear streaming text
                 _streamingReasoning.value = ""  // QUAL-5: clear reasoning
