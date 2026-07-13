@@ -1,7 +1,6 @@
 package dev.hermes.core.data
 
 import android.app.Application
-import androidx.lifecycle.AndroidViewModel
 import dev.hermes.core.auth.AuthPrefsRepository
 import dev.hermes.core.network.ApiEndpoint
 import dev.hermes.core.network.SharedHttpClient
@@ -24,8 +23,11 @@ import kotlinx.serialization.Serializable
  *
  * The server requires a session_id for file access — files are scoped
  * to the session's workspace.
+ *
+ * ARCH-1 fix: no longer extends AndroidViewModel. Plain class,
+ * held by [dev.hermes.core.di.ServiceLocator].
  */
-class WorkspaceRepository(app: Application) : AndroidViewModel(app) {
+class WorkspaceRepository(app: Application) {
 
     init { AuthPrefsRepository.init(app.applicationContext) }
 

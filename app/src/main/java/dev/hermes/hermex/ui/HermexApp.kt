@@ -8,20 +8,14 @@ import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
-import dev.hermes.core.auth.AuthRepository
 import dev.hermes.core.auth.AuthState
-import dev.hermes.core.data.ConfigRepository
-import dev.hermes.core.data.SessionRepository
-import dev.hermes.core.data.WorkspaceRepository
+import dev.hermes.core.di.ServiceLocator
 import dev.hermes.hermex.ui.drawer.AppDrawer
 import dev.hermes.hermex.ui.navigation.HermesNavHost
 import dev.hermes.hermex.ui.navigation.Routes
@@ -29,10 +23,13 @@ import kotlinx.coroutines.launch
 
 @Composable
 fun HermexApp() {
-    val authRepository: AuthRepository = viewModel()
-    val sessionRepository: SessionRepository = viewModel()
-    val configRepository: ConfigRepository = viewModel()
-    val workspaceRepository: WorkspaceRepository = viewModel()
+    // ARCH-1+2 fix: repositories are now plain classes held by ServiceLocator,
+    // not AndroidViewModels created via viewModel(). Single instance per app.
+    val authRepository = ServiceLocator.authRepository
+    val sessionRepository = ServiceLocator.sessionRepository
+    val configRepository = ServiceLocator.configRepository
+    val workspaceRepository = ServiceLocator.workspaceRepository
+
     val authState by authRepository.authState.collectAsStateWithLifecycle()
     val navController = rememberNavController()
 
@@ -48,16 +45,6 @@ fun HermexApp() {
 
     val drawerState = rememberDrawerState(initialValue = androidx.compose.material3.DrawerValue.Closed)
     val scope = rememberCoroutineScope()
-
-    // Track the current route so the drawer knows which session is open
-    // (for highlighting in the recents list)
-    val navBackStackEntry by navController.currentBackStackEntryAsState()
-    val currentRoute = navBackStackEntry?.destination?.route
-    val currentSessionId = remember(currentRoute) {
-        if (currentRoute?.startsWith("chat/") == true) {
-            currentRoute.removePrefix("chat/").replace("/", "")
-        } else null
-    }
 
     fun openDrawer() { scope.launch { drawerState.open() } }
     fun closeDrawer() { scope.launch { drawerState.close() } }
@@ -82,9 +69,15 @@ fun HermexApp() {
         }
     }
 
-    // Only show the drawer when logged in
+    val navBackStackEntry by navController.currentBackStackEntryAsState()
+    val currentRoute = navBackStackEntry?.destination?.route
+    val currentSessionId = remember(currentRoute) {
+        if (currentRoute?.startsWith("chat/") == true) {
+            currentRoute.removePrefix("chat/").replace("/", "")
+        } else null
+    }
+
     if (!isLoggedIn) {
-        // Login screen — no drawer
         Surface(
             modifier = Modifier.fillMaxSize(),
             color = MaterialTheme.colorScheme.background
@@ -134,8 +127,6 @@ fun HermexApp() {
                 },
                 onSessionClick = { sessionId ->
                     closeDrawer()
-                    // If this session is already open, just close the drawer
-                    // (don't reload the chat)
                     if (currentSessionId == sessionId) return@AppDrawer
                     navController.navigate(Routes.chat(sessionId)) {
                         launchSingleTop = true

@@ -1,7 +1,6 @@
 package dev.hermes.core.auth
 
 import android.app.Application
-import androidx.lifecycle.AndroidViewModel
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import dev.hermes.core.network.ApiEndpoint
@@ -65,10 +64,10 @@ sealed interface LoginResult {
  * every other repository (SessionRepository, ChatStream) shares the
  * same cookie jar automatically.
  *
- * Extends [AndroidViewModel] so it can be created by the default Compose
- * `viewModel()` factory with just an [Application] parameter.
+ * ARCH-1 fix: no longer extends AndroidViewModel. Plain class,
+ * held as a singleton by [dev.hermes.core.di.ServiceLocator].
  */
-class AuthRepository(app: Application) : AndroidViewModel(app) {
+class AuthRepository(app: Application) {
 
     private val context = app.applicationContext
     private val _authState = MutableStateFlow<AuthState>(AuthState.LoggedOut)

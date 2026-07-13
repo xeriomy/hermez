@@ -1,7 +1,6 @@
 package dev.hermes.core.data
 
 import android.app.Application
-import androidx.lifecycle.AndroidViewModel
 import dev.hermes.core.auth.AuthPrefsRepository
 import dev.hermes.core.data.local.AppDatabase
 import dev.hermes.core.data.local.MessageEntity
@@ -19,7 +18,11 @@ import kotlinx.coroutines.flow.map
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
-class SessionRepository(app: Application) : AndroidViewModel(app) {
+/**
+ * ARCH-1 fix: no longer extends AndroidViewModel. Plain class,
+ * held by [dev.hermes.core.di.ServiceLocator].
+ */
+class SessionRepository(app: Application) {
     private val context = app.applicationContext
     private val db = AppDatabase.getInstance(context)
     init { AuthPrefsRepository.init(context) }

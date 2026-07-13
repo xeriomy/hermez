@@ -1,7 +1,6 @@
 package dev.hermes.core.data
 
 import android.app.Application
-import androidx.lifecycle.AndroidViewModel
 import dev.hermes.core.auth.AuthPrefsRepository
 import dev.hermes.core.network.ApiEndpoint
 import dev.hermes.core.network.SharedHttpClient
@@ -22,10 +21,10 @@ import kotlinx.serialization.Serializable
  * Fetches and caches the server's configuration: available models,
  * workspaces, and profiles. Used by the chat composer to show pickers.
  *
- * Extends [AndroidViewModel] so it can be created by the default Compose
- * `viewModel()` factory and scoped to the Activity.
+ * ARCH-1 fix: no longer extends AndroidViewModel. Plain class,
+ * held by [dev.hermes.core.di.ServiceLocator].
  */
-class ConfigRepository(app: Application) : AndroidViewModel(app) {
+class ConfigRepository(app: Application) {
 
     init { AuthPrefsRepository.init(app.applicationContext) }
 
