@@ -29,7 +29,6 @@ import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Menu
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.AssistChip
@@ -79,7 +78,6 @@ import dev.hermes.core.data.ChatMessage
 import dev.hermes.core.data.SessionRepository
 import dev.hermes.core.data.ToolCallInfo
 import dev.hermes.core.network.ChatStream
-import dev.hermes.core.network.StreamState
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -104,59 +102,15 @@ fun ChatScreen(
         }
     )
 
-    // --- ChatViewModel state ---
-    // CHAT-3 fix: allMessages = pendingMessages + persisted (deduped).
-    // Pending user messages appear instantly (optimistic UI); on
-    // stream completion, loadSession fetches the server's version and
-    // the combiner dedups the pending copy by content+timestamp.
-    val allMessages by chatViewModel.allMessages.collectAsStateWithLifecycle()
-    val streamState by chatViewModel.streamState.collectAsStateWithLifecycle()
+    // --- ChatViewModel state (simple, flat StateFlows) ---
+    val messages by chatViewModel.messages.collectAsStateWithLifecycle()
     val isStreaming by chatViewModel.isStreaming.collectAsStateWithLifecycle()
+    val streamingContent by chatViewModel.streamingContent.collectAsStateWithLifecycle()
+    val streamingReasoning by chatViewModel.streamingReasoning.collectAsStateWithLifecycle()
+    val streamingTools by chatViewModel.streamingTools.collectAsStateWithLifecycle()
     val error by chatViewModel.error.collectAsStateWithLifecycle()
     val remainingToLoad by chatViewModel.remainingToLoad.collectAsStateWithLifecycle()
     val isInitialLoading by chatViewModel.isInitialLoading.collectAsStateWithLifecycle()
-
-    // CHAT-3 fix: derive streaming-overlay values from streamState.
-    // The streaming bubble stays visible during Completing (between
-    // StreamEnd and loadSession returning) so there's no flicker.
-    val streamingContent: String = when (streamState) {
-        is StreamState.Streaming -> (streamState as StreamState.Streaming).content.toString()
-        is StreamState.Completing -> {
-            // Keep showing the last streaming content until the
-            // persisted message arrives. The Streaming state's
-            // StringBuilder is no longer accessible here (we're in
-            // Completing now), so we fall back to whatever the UI
-            // last rendered — Compose caches the value across
-            // recomposition because it's read in a derived val.
-            // In practice this means: the StreamingBubble keeps
-            // rendering its previous content until allMessages
-            // updates and the bubble disappears.
-            ""
-        }
-        else -> ""
-    }
-    // During Completing, we want to keep showing the streaming bubble
-    // even though streamingContent is empty above (we lost the
-    // reference to the StringBuilder). To avoid flicker, we remember
-    // the last non-empty streaming content.
-    var lastStreamingContent by remember { mutableStateOf("") }
-    if (streamingContent.isNotEmpty()) {
-        lastStreamingContent = streamingContent
-    }
-    // Clear the cache when we leave the streaming/Completing states.
-    if (streamState is StreamState.Idle || streamState is StreamState.Failed) {
-        lastStreamingContent = ""
-    }
-
-    val streamingReasoning: String = (streamState as? StreamState.Streaming)?.reasoning?.toString() ?: ""
-    val streamingTools: List<ToolCallInfo> = (streamState as? StreamState.Streaming)?.tools ?: emptyList()
-
-    // CHAT-3 fix: show the streaming bubble while Streaming OR while
-    // Completing (with cached content). The bubble disappears when
-    // streamState goes to Idle — by then, allMessages has emitted the
-    // persisted message and the MessageBubble has replaced it.
-    val showStreamingBubble = streamState is StreamState.Streaming ||
-        (streamState is StreamState.Completing && lastStreamingContent.isNotEmpty())
 
     // Config (models, workspaces, profiles)
     val models by configRepository.models.collectAsStateWithLifecycle()
@@ -215,21 +169,17 @@ fun ChatScreen(
         chatViewModel.loadMessages(sessionId)
     }
 
-    // CHAT-8 fix: smart auto-scroll. Only scroll to the bottom if the
-    // user is already near the bottom (within 2 items of the end). If
-    // they scrolled up to read older messages, don't yank them back
-    // when a new token arrives or the stream completes.
-    LaunchedEffect(allMessages.size, streamState) {
-        if (allMessages.isEmpty()) return@LaunchedEffect
+    // Smart auto-scroll: only scroll to the bottom if the user is
+    // already near the bottom (within 2 items of the end). If they
+    // scrolled up to read older messages, don't yank them back.
+    LaunchedEffect(messages.size, streamingContent) {
+        if (messages.isEmpty()) return@LaunchedEffect
         val layoutInfo = listState.layoutInfo
         val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: return@LaunchedEffect
-        val isNearBottom = lastVisible >= allMessages.size - 2
+        // +2 for the streaming bubble and potential reasoning/tools
+        val isNearBottom = lastVisible >= messages.size - 2
         if (isNearBottom) {
-            // allMessages includes the streaming bubble at the end if
-            // showStreamingBubble is true; scroll to the last item
-            // (which is either the last message or the streaming bubble).
-            val targetIndex = allMessages.size - 1
-            listState.animateScrollToItem(targetIndex)
+            listState.animateScrollToItem(messages.size - 1)
         }
     }
 
@@ -245,19 +195,6 @@ fun ChatScreen(
                 }
             },
             actions = {
-                // CHAT-9 fix: manual refresh action. Forces loadSession
-                // regardless of whether the session is already loaded —
-                // fetches new messages that arrived on the server while
-                // the user was away.
-                IconButton(
-                    onClick = { chatViewModel.refresh(sessionId) },
-                    enabled = !isStreaming
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Refresh,
-                        contentDescription = "Refresh"
-                    )
-                }
                 IconButton(onClick = onShowFiles) {
                     Icon(
                         imageVector = Icons.Default.Folder,
@@ -278,7 +215,7 @@ fun ChatScreen(
         ) {
             // Initial loading spinner — shown only on first-ever load when
             // cache is empty AND we're fetching from server.
-            if (isInitialLoading && allMessages.isEmpty()) {
+            if (isInitialLoading && messages.isEmpty()) {
                 item {
                     Box(
                         modifier = Modifier.fillMaxWidth().padding(32.dp),
@@ -303,58 +240,36 @@ fun ChatScreen(
                 }
             }
 
-            // CHAT-3 fix: render allMessages (pending + persisted, deduped).
-            // Pending messages appear instantly (optimistic UI); on stream
-            // completion they're replaced by the server's version with a
-            // real message_id.
-            items(allMessages) { msg ->
+            // Messages from Room — keyed by messageId for stable identity
+            // across recompositions (prevents unnecessary re-renders on scroll).
+            items(messages, key = { it.messageId }) { msg ->
                 MessageBubble(message = msg)
             }
 
-            // QUAL-5: Show reasoning block while streaming
+            // Reasoning block while streaming
             if (isStreaming && streamingReasoning.isNotEmpty()) {
                 item {
                     ReasoningBubble(content = streamingReasoning)
                 }
             }
 
-            // QUAL-5: Show tool call cards while streaming
+            // Tool call cards while streaming
             if (isStreaming && streamingTools.isNotEmpty()) {
-                items(streamingTools) { tool ->
+                items(streamingTools, key = { it.name + it.args }) { tool ->
                     ToolCallCard(tool = tool)
                 }
             }
 
-            // CHAT-3 fix: flicker-free transition. The streaming bubble
-            // stays visible during the Completing state (between StreamEnd
-            // and loadSession returning) so there's no gap where the
-            // assistant message is nowhere on screen.
-            //
-            // PERF-1: while streaming, render as plain Text (no Markdown
-            // re-parse). On stream completion, the full message appears in
-            // allMessages via Room observer with full Markdown rendering.
-            if (showStreamingBubble) {
-                val contentToShow = streamingContent.ifEmpty { lastStreamingContent }
-                if (contentToShow.isNotEmpty()) {
-                    item {
-                        StreamingBubble(content = contentToShow)
-                    }
-                } else {
-                    // No tokens yet — show a spinner while we wait for the
-                    // first token (the model is "thinking").
-                    item {
-                        Box(
-                            modifier = Modifier.fillMaxWidth(),
-                            contentAlignment = Alignment.CenterStart
-                        ) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.padding(8.dp)
-                            )
-                        }
-                    }
+            // Live streaming response — plain Text (no Markdown) for O(1)
+            // per token. On stream completion, this is cleared and the
+            // persisted message (with Markdown) appears in `messages`.
+            if (isStreaming && streamingContent.isNotEmpty()) {
+                item {
+                    StreamingBubble(content = streamingContent)
                 }
-            } else if (streamState is StreamState.Starting) {
-                // Starting state: chat.start is in flight, no stream_id yet.
+            } else if (isStreaming) {
+                // No tokens yet — show a spinner while waiting for the
+                // first token (the model is "thinking").
                 item {
                     Box(
                         modifier = Modifier.fillMaxWidth(),

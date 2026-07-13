@@ -97,6 +97,41 @@ class SessionRepository(app: Application) {
         db.messageDao().getMessageCountFlow(sessionId)
 
     /**
+     * Insert a user message to Room with a client-generated ID
+     * (`local_${millis}`). Used for optimistic UI — the message appears
+     * instantly before the server confirms it.
+     *
+     * On stream completion, [loadSession] fetches the server's version
+     * (with a real `message_id`), and [deleteMessage] removes this
+     * local copy. If the stream fails, the local copy stays so the
+     * user can see what they tried to send.
+     */
+    suspend fun insertLocalMessage(
+        sessionId: String,
+        messageId: String,
+        role: String,
+        content: String,
+        timestamp: Long
+    ) {
+        db.messageDao().insertMessage(
+            MessageEntity(
+                sessionId = sessionId,
+                messageId = messageId,
+                role = role,
+                content = content,
+                timestamp = timestamp,
+                model = null, provider = null, toolCalls = null,
+                reasoning = null, attachments = null, metadata = null
+            )
+        )
+    }
+
+    /** Delete a single message by its messageId (e.g. a local_ copy). */
+    suspend fun deleteMessage(messageId: String) {
+        db.messageDao().deleteMessage(messageId)
+    }
+
+    /**
      * Persist a locally-sent user message + the assistant's streamed
      * response to Room.
      *
@@ -456,8 +491,8 @@ class SessionRepository(app: Application) {
         fun toEntity(): SessionEntity = SessionEntity(
             sessionId = session_id,
             title = title,
-            createdAt = (created_at ?: 0.0).toLong(),
-            updatedAt = (updated_at ?: 0.0).toLong(),
+            createdAt = ((created_at ?: 0.0) * 1000).toLong(),
+            updatedAt = ((updated_at ?: 0.0) * 1000).toLong(),
             pinned = pinned,
             archived = archived,
             projectId = project_id,
@@ -494,8 +529,8 @@ class SessionRepository(app: Application) {
         fun toEntity(): SessionEntity = SessionEntity(
             sessionId = session_id,
             title = title,
-            createdAt = (created_at ?: 0.0).toLong(),
-            updatedAt = (updated_at ?: 0.0).toLong(),
+            createdAt = ((created_at ?: 0.0) * 1000).toLong(),
+            updatedAt = ((updated_at ?: 0.0) * 1000).toLong(),
             pinned = pinned,
             archived = archived,
             projectId = project_id,
@@ -530,7 +565,14 @@ class SessionRepository(app: Application) {
             messageId = message_id,
             role = role,
             content = content,
-            timestamp = (timestamp ?: 0.0).toLong(),
+            // CRITICAL FIX: hermes-webui sends timestamps as Float Unix
+            // epoch SECONDS (e.g. 1783449907.28). System.currentTimeMillis()
+            // returns milliseconds (1783449907285). Without * 1000, server
+            // messages have timestamps ~1000x smaller than client messages
+            // → Room ORDER BY timestamp produces completely wrong ordering
+            // → agent responses appear before the user message that
+            // triggered them, old messages appear after new ones, etc.
+            timestamp = ((timestamp ?: 0.0) * 1000).toLong(),
             model = model,
             provider = provider,
             toolCalls = tool_calls?.toString(),
