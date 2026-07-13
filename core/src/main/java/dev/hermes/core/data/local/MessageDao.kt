@@ -27,6 +27,23 @@ interface MessageDao {
     @Query("SELECT COUNT(*) FROM messages WHERE sessionId = :sessionId")
     suspend fun getMessageCount(sessionId: String): Int
 
+    /**
+     * Reactive count of cached messages for [sessionId].
+     *
+     * Used by the new ChatViewModel (chat rewrite §5.3) to compute
+     * `remainingToLoad` as a Flow — `remaining = total - visibleCount`.
+     * When a new message is inserted (e.g. by `loadSession` after a
+     * stream completes), this Flow re-emits and the "Load more (N)"
+     * button updates automatically.
+     *
+     * Replaces the old pattern of calling `getMessageCount` (a suspend
+     * one-shot) after every cache write, which was racy and required
+     * manual `_remainingToLoad.value = ...` updates scattered across
+     * the ViewModel.
+     */
+    @Query("SELECT COUNT(*) FROM messages WHERE sessionId = :sessionId")
+    fun getMessageCountFlow(sessionId: String): Flow<Int>
+
     @Query("DELETE FROM messages WHERE sessionId = :sessionId")
     suspend fun deleteMessagesForSession(sessionId: String)
 

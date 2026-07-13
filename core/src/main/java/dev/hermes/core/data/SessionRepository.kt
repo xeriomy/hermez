@@ -59,6 +59,20 @@ class SessionRepository(app: Application) {
         db.messageDao().getMessageCount(sessionId)
 
     /**
+     * Reactive count of cached messages for [sessionId].
+     *
+     * Used by the new ChatViewModel (chat rewrite §5.3) to compute
+     * `remainingToLoad` as a derived Flow — no manual state updates
+     * needed. When `loadSession` inserts new messages after a stream
+     * completes, this Flow re-emits and the "Load more (N)" indicator
+     * updates automatically.
+     *
+     * See: hermez-chat-rewrite.pdf §6.3 (getMessageCount Flow).
+     */
+    fun getMessageCountFlow(sessionId: String): Flow<Int> =
+        db.messageDao().getMessageCountFlow(sessionId)
+
+    /**
      * Persist a locally-sent user message + the assistant's streamed
      * response to Room. Called when a chat stream completes so the
      * messages survive navigation away and back.
