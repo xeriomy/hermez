@@ -91,20 +91,29 @@ class ChatStream(
         }
     }
 
-    // QUAL-12 fix: dropped @Serializable from all subclasses. They are
-    // parsed manually via parseSseEvent() using JSON.decodeFromString,
-    // not via polymorphic serialization. The annotations were the worst
-    // of both worlds — metadata overhead with no benefit.
+    // QUAL-12: @Serializable IS needed on subclasses because parseSseEvent
+    // uses json.decodeFromString<Token>(data) for each event type. The
+    // sealed interface itself is not @Serializable (no polymorphic
+    // dispatch) — each subclass is decoded explicitly by event name.
     sealed interface StreamEvent {
+        @Serializable
         data class Token(val token: String, val stream_id: String?) : StreamEvent
+        @Serializable
         data class Tool(val name: String, val args: String, val stream_id: String?) : StreamEvent
+        @Serializable
         data class ToolComplete(val name: String, val result: String, val stream_id: String?) : StreamEvent
+        @Serializable
         data class Reasoning(val text: String, val stream_id: String?) : StreamEvent
+        @Serializable
         data class Title(val title: String, val stream_id: String?) : StreamEvent
+        @Serializable
         data class Done(val stream_id: String?) : StreamEvent
+        @Serializable
         data class InterimAssistant(val content: String, val stream_id: String?) : StreamEvent
+        @Serializable
         data class StreamEnd(val stream_id: String?) : StreamEvent
-        data class Error(val message: String, val stream_id: String?) : StreamEvent
+        @Serializable
+        data class Error(val message: String? = null, val stream_id: String? = null) : StreamEvent
         data class Unknown(val type: String, val data: String, val stream_id: String?) : StreamEvent
     }
 
