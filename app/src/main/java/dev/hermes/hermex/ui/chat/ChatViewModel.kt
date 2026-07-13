@@ -2,7 +2,9 @@ package dev.hermes.hermex.ui.chat
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import dev.hermes.core.data.ChatMessage
 import dev.hermes.core.data.SessionRepository
+import dev.hermes.core.data.ToolCallInfo
 import dev.hermes.core.network.ChatStream
 import dev.hermes.core.network.friendlyError
 import kotlinx.coroutines.Job
@@ -381,12 +383,7 @@ class ChatViewModel(
  */
 private class StreamEndSignal : Exception()
 
-/**
- * QUAL-5: Represents a tool call during streaming.
- * Shown as a small card in the chat UI while the agent is working.
- */
-data class ToolCallInfo(
-    val name: String,
-    val args: String,
-    val result: String?
-)
+// ToolCallInfo and ChatMessage now live in dev.hermes.core.data (see
+// core/data/ChatMessage.kt). They were moved there so StreamState
+// (core/network/StreamState.kt) can reference them without reversing
+// the module dependency direction.

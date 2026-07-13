@@ -74,7 +74,9 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.mikepenz.markdown.m3.Markdown
+import dev.hermes.core.data.ChatMessage
 import dev.hermes.core.data.SessionRepository
+import dev.hermes.core.data.ToolCallInfo
 import dev.hermes.core.network.ChatStream
 import kotlinx.coroutines.launch
 
@@ -665,12 +667,9 @@ fun normalizeMessageContent(content: String): String {
     return normalized
 }
 
-data class ChatMessage(
-    val messageId: String,
-    val role: String,
-    val content: String,
-    val timestamp: Long
-)
+// ChatMessage and ToolCallInfo now live in dev.hermes.core.data
+// (moved there so StreamState can reference them — see
+// core/data/ChatMessage.kt for the full docstrings).
 
 /**
  * A horizontal row of dropdown pickers for model, workspace, and profile.

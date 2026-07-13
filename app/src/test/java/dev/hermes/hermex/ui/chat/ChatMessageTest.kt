@@ -1,5 +1,7 @@
 package dev.hermes.hermex.ui.chat
 
+import dev.hermes.core.data.ChatMessage
+import dev.hermes.core.data.ToolCallInfo
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
