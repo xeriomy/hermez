@@ -104,6 +104,7 @@ fun ChatScreen(
 
     // --- ChatViewModel state (simple, flat StateFlows) ---
     val messages by chatViewModel.messages.collectAsStateWithLifecycle()
+    val pendingMessage by chatViewModel.pendingMessage.collectAsStateWithLifecycle()
     val isStreaming by chatViewModel.isStreaming.collectAsStateWithLifecycle()
     val streamingContent by chatViewModel.streamingContent.collectAsStateWithLifecycle()
     val streamingReasoning by chatViewModel.streamingReasoning.collectAsStateWithLifecycle()
@@ -170,16 +171,19 @@ fun ChatScreen(
     }
 
     // Smart auto-scroll: only scroll to the bottom if the user is
-    // already near the bottom (within 2 items of the end). If they
-    // scrolled up to read older messages, don't yank them back.
-    LaunchedEffect(messages.size, streamingContent) {
-        if (messages.isEmpty()) return@LaunchedEffect
+    // already near the bottom. If they scrolled up to read older
+    // messages, don't yank them back.
+    LaunchedEffect(messages.size, streamingContent, pendingMessage) {
+        if (messages.isEmpty() && pendingMessage == null) return@LaunchedEffect
         val layoutInfo = listState.layoutInfo
         val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: return@LaunchedEffect
-        // +2 for the streaming bubble and potential reasoning/tools
-        val isNearBottom = lastVisible >= messages.size - 2
+        // +3 for pending message, streaming bubble, reasoning/tools
+        val totalItems = messages.size + (if (pendingMessage != null) 1 else 0)
+        val isNearBottom = lastVisible >= totalItems - 3
         if (isNearBottom) {
-            listState.animateScrollToItem(messages.size - 1)
+            // Scroll to the very bottom (pending message or streaming bubble)
+            val targetIndex = totalItems - 1
+            listState.animateScrollToItem(targetIndex.coerceAtLeast(0))
         }
     }
 
@@ -244,6 +248,16 @@ fun ChatScreen(
             // across recompositions (prevents unnecessary re-renders on scroll).
             items(messages, key = { it.messageId }) { msg ->
                 MessageBubble(message = msg)
+            }
+
+            // Pending user message (optimistic UI, NOT in Room yet).
+            // Shown at the bottom until the stream completes and
+            // loadSession fetches the server's version.
+            val pending = pendingMessage
+            if (pending != null) {
+                item(key = "pending_${pending.messageId}") {
+                    MessageBubble(message = pending)
+                }
             }
 
             // Reasoning block while streaming

@@ -8,7 +8,6 @@ import dev.hermes.core.data.ToolCallInfo
 import dev.hermes.core.network.ChatStream
 import dev.hermes.core.network.friendlyError
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -28,61 +27,34 @@ import kotlinx.coroutines.withTimeout
  *
  * ## How it works
  *
- * **Messages** come from Room via a Flow observer. When the user sends
- * a message, it's inserted to Room immediately with a `local_` ID so it
- * appears instantly and survives navigation. On stream completion,
- * `loadSession` fetches the server's version (with real message_ids),
- * and the `local_` copy is deleted.
+ * **Messages** come from Room via a Flow observer. The Room cache is
+ * populated by `loadSession` (fetches from server). The user's sent
+ * message is shown as an in-memory `pendingMessage` appended to the
+ * bottom of the list — it's NOT written to Room until the server
+ * confirms it (via `loadSession` on next navigation or stream end).
  *
  * **Streaming** uses a separate `streamingContent: StateFlow<String>`.
  * Each token appends to a StringBuilder, then we publish
- * `_streamingContent.value = content.toString()`. This is O(1) per
- * token for the append, and the StateFlow emission triggers because
- * String is a value type (no equality trap like StringBuilder in a
- * data class).
+ * `_streamingContent.value = content.toString()`. On stream end, we
+ * call `loadSession` to fetch the server's version (with real IDs).
  *
- * **Cancellation** runs in a `NonCancellable` block so `cancelStream`
- * and `loadSession` complete even if the coroutine is being cancelled.
- *
- * ## Why the previous "rewrite" was reverted
- *
- * The chat rewrite (commits 859177c through 515ab06) introduced a
- * `StreamState` sealed interface, a `pendingMessages` + `allMessages`
- * combiner, and `flatMapLatest` chains. It looked clean but had three
- * critical bugs:
- *  1. `StreamState.Streaming` held a `StringBuilder` — `data class
- *     copy(content = sameStringBuilder)` didn't trigger StateFlow
- *     emission (identity equality) → tokens never appeared live.
- *  2. `pendingMessages` was prepended to `persisted` → new user
- *     messages appeared at the TOP instead of the bottom.
- *  3. The timestamp unit mismatch (server sends seconds, client uses
- *     ms) was never fixed → Room ordering was completely wrong.
- *
- * This implementation keeps the good parts of the rewrite (reattach,
- * idempotent cancel, NonCancellable cleanup, Mutex on loadSession) but
- * goes back to the simple streaming model that actually works.
+ * **No deletions, no race conditions.** The previous implementation
+ * inserted a `local_` message to Room then deleted it after `loadSession`
+ * — but if `loadSession` didn't return the user message in its window,
+ * the message vanished. Now we just append a pending message in-memory
+ * and clear it when the stream completes (by which point `loadSession`
+ * has fetched everything).
  */
 class ChatViewModel(
     private val sessionRepository: SessionRepository,
     private val chatStream: ChatStream
 ) : ViewModel() {
 
-    // ------------------------------------------------------------------
-    // Messages — from Room (single source of truth)
-    // ------------------------------------------------------------------
-
     private val _sessionId = MutableStateFlow("")
     val sessionId: StateFlow<String> = _sessionId.asStateFlow()
 
     private val _visibleCount = MutableStateFlow(INITIAL_MESSAGE_COUNT)
 
-    /**
-     * Messages from Room. The Room Flow observer picks up any insert/
-     * delete automatically — no manual refresh needed.
-     *
-     * Pagination is done by adjusting [_visibleCount] — Room re-emits
-     * with the larger window.
-     */
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     val messages: StateFlow<List<ChatMessage>> = combine(
         _sessionId, _visibleCount
@@ -95,18 +67,12 @@ class ChatViewModel(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     // ------------------------------------------------------------------
-    // Streaming state — simple, flat StateFlows
+    // Streaming state
     // ------------------------------------------------------------------
 
     private val _isStreaming = MutableStateFlow(false)
     val isStreaming: StateFlow<Boolean> = _isStreaming.asStateFlow()
 
-    /**
-     * The live streaming assistant response text. Plain Text in the UI
-     * while streaming (no Markdown re-parse). On stream completion, this
-     * is cleared and the persisted message (with Markdown) appears in
-     * [messages] via the Room Flow.
-     */
     private val _streamingContent = MutableStateFlow("")
     val streamingContent: StateFlow<String> = _streamingContent.asStateFlow()
 
@@ -116,9 +82,13 @@ class ChatViewModel(
     private val _streamingTools = MutableStateFlow<List<ToolCallInfo>>(emptyList())
     val streamingTools: StateFlow<List<ToolCallInfo>> = _streamingTools.asStateFlow()
 
-    // ------------------------------------------------------------------
-    // Misc
-    // ------------------------------------------------------------------
+    /**
+     * The user's sent message, shown optimistically at the bottom of
+     * the list. NOT in Room. Cleared when the stream completes (by
+     * which point loadSession has fetched the server's version).
+     */
+    private val _pendingMessage = MutableStateFlow<ChatMessage?>(null)
+    val pendingMessage: StateFlow<ChatMessage?> = _pendingMessage.asStateFlow()
 
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
@@ -149,7 +119,6 @@ class ChatViewModel(
         loadedSessionId = sessionId
         _sessionId.value = sessionId
 
-        // The flatMapLatest on _sessionId handles the Room observer.
         if (isSameSession) return
 
         _isInitialLoading.value = true
@@ -184,10 +153,10 @@ class ChatViewModel(
     }
 
     /**
-     * Send a message. The user message is inserted to Room immediately
-     * (optimistic UI) with a `local_` ID. On stream completion,
-     * `loadSession` fetches the server's version and the `local_` copy
-     * is deleted.
+     * Send a message. The user message is shown as an in-memory
+     * `pendingMessage` at the bottom of the list (NOT in Room). On
+     * stream completion, `loadSession` fetches the server's version
+     * (with a real message_id) and we clear the pending message.
      */
     fun sendMessage(
         text: String,
@@ -200,25 +169,17 @@ class ChatViewModel(
     ) {
         if (text.isBlank() || _isStreaming.value) return
 
-        val userMessageId = "local_${System.currentTimeMillis()}"
-        val userTimestamp = System.currentTimeMillis()
-
-        // Insert to Room immediately — appears instantly, survives
-        // navigation, survives ViewModel being cleared mid-stream.
-        viewModelScope.launch {
-            sessionRepository.insertLocalMessage(
-                sessionId = sessionId,
-                messageId = userMessageId,
-                role = "user",
-                content = text.trim(),
-                timestamp = userTimestamp
-            )
-        }
-
+        val userMessage = ChatMessage(
+            messageId = "pending_${System.currentTimeMillis()}",
+            role = "user",
+            content = text.trim(),
+            timestamp = System.currentTimeMillis()
+        )
+        _pendingMessage.value = userMessage
         _error.value = null
+
         startStream(
             sessionId = sessionId,
-            userMessageId = userMessageId,
             message = text.trim(),
             model = model, provider = provider,
             workspace = workspace, profile = profile,
@@ -232,7 +193,6 @@ class ChatViewModel(
 
     private fun startStream(
         sessionId: String,
-        userMessageId: String,
         message: String,
         model: String?, provider: String?,
         workspace: String?, profile: String?,
@@ -273,113 +233,84 @@ class ChatViewModel(
                     } else {
                         msg
                     }
-                    // Stream never started — delete the local user message
-                    // (the server never received it).
-                    sessionRepository.deleteMessage(userMessageId)
+                    _pendingMessage.value = null
                     return@launch
                 }
 
                 streamId = start.getOrNull()?.stream_id ?: run {
                     _error.value = "No stream ID returned"
-                    sessionRepository.deleteMessage(userMessageId)
+                    _pendingMessage.value = null
                     return@launch
                 }
 
                 streamStarted = true
 
-                // Safety net: 5-minute timeout. If the stream hasn't ended
-                // by then (SSE connection hung, server died, etc.), give up
-                // and fetch whatever the server has. This ensures the spinner
-                // can NEVER spin forever.
                 var timedOut = false
                 try {
                     withTimeout(5 * 60 * 1000L) {
-                        val streamEvents = chatStream.streamEvents(streamId)
-                        var done = false
-                        streamEvents.collect { event ->
-                            if (done) return@collect
+                        chatStream.streamEvents(streamId).collect { event ->
                             when (event) {
-                        is ChatStream.StreamEvent.Token -> {
-                            content.append(event.token)
-                            _streamingContent.value = content.toString()
-                        }
-                        is ChatStream.StreamEvent.Reasoning -> {
-                            reasoning.append(event.text)
-                            _streamingReasoning.value = reasoning.toString()
-                        }
-                        is ChatStream.StreamEvent.Tool -> {
-                            tools.add(ToolCallInfo(event.name, event.args, null))
-                            _streamingTools.value = tools.toList()
-                        }
-                        is ChatStream.StreamEvent.ToolComplete -> {
-                            val idx = tools.indexOfLast {
-                                it.name == event.name && it.result == null
+                                is ChatStream.StreamEvent.Token -> {
+                                    content.append(event.token)
+                                    _streamingContent.value = content.toString()
+                                }
+                                is ChatStream.StreamEvent.Reasoning -> {
+                                    reasoning.append(event.text)
+                                    _streamingReasoning.value = reasoning.toString()
+                                }
+                                is ChatStream.StreamEvent.Tool -> {
+                                    tools.add(ToolCallInfo(event.name, event.args, null))
+                                    _streamingTools.value = tools.toList()
+                                }
+                                is ChatStream.StreamEvent.ToolComplete -> {
+                                    val idx = tools.indexOfLast {
+                                        it.name == event.name && it.result == null
+                                    }
+                                    if (idx >= 0) {
+                                        tools[idx] = tools[idx].copy(result = event.result)
+                                    }
+                                    _streamingTools.value = tools.toList()
+                                }
+                                is ChatStream.StreamEvent.Title -> {
+                                    android.util.Log.d("ChatViewModel", "Title: ${event.title}")
+                                }
+                                is ChatStream.StreamEvent.Done -> Unit
+                                is ChatStream.StreamEvent.InterimAssistant -> Unit
+                                is ChatStream.StreamEvent.StreamEnd -> return@collect
+                                is ChatStream.StreamEvent.Error -> {
+                                    _error.value = event.message ?: "Stream error"
+                                    return@collect
+                                }
+                                is ChatStream.StreamEvent.Unknown -> Unit
                             }
-                            if (idx >= 0) {
-                                tools[idx] = tools[idx].copy(result = event.result)
-                            }
-                            _streamingTools.value = tools.toList()
                         }
-                        is ChatStream.StreamEvent.Title -> {
-                            android.util.Log.d("ChatViewModel", "Title: ${event.title}")
-                        }
-                        is ChatStream.StreamEvent.Done -> Unit
-                        is ChatStream.StreamEvent.InterimAssistant -> Unit
-                        is ChatStream.StreamEvent.StreamEnd -> {
-                            done = true
-                            return@collect
-                        }
-                        is ChatStream.StreamEvent.Error -> {
-                            _error.value = event.message ?: "Stream error"
-                            done = true
-                            return@collect
-                        }
-                        is ChatStream.StreamEvent.Unknown -> Unit
                     }
-                        } // end collect
-                    } // end withTimeout
                 } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
-                    // Stream took too long — fetch whatever the server has.
-                    // This is not an error; the response may just be very long.
                     timedOut = true
                     streamId?.let { chatStream.cancelStream(it) }
                 }
 
-                // If the stream timed out, skip the error check and go
-                // straight to fetching whatever the server has.
-                if (!timedOut && _error.value != null) {
-                    sessionRepository.deleteMessage(userMessageId)
-                    return@launch
-                }
-
-                // Normal completion: fetch the server's authoritative
-                // version (with real message_ids). The Room Flow observer
-                // picks up the new messages automatically.
+                // Fetch the server's authoritative version (with real
+                // message_ids). The Room Flow observer picks up the new
+                // messages automatically. This brings in BOTH the user
+                // message and the assistant response.
                 sessionRepository.loadSession(sessionId, msgLimit = _visibleCount.value)
-                // Delete the local user message — the server's version
-                // (with a real message_id) is now in Room.
-                sessionRepository.deleteMessage(userMessageId)
+
+                // Clear the pending message — the server's version is
+                // now in Room.
+                _pendingMessage.value = null
             } catch (e: CancellationException) {
                 // User tapped Stop, or ViewModel was cleared.
-                // Cleanup in NonCancellable so it completes.
                 withContext(NonCancellable) {
                     streamId?.let { chatStream.cancelStream(it) }
                     if (streamStarted) {
-                        // Stream had started — fetch whatever the server
-                        // generated before cancellation, then delete the
-                        // local user message (server has it now).
                         sessionRepository.loadSession(sessionId, msgLimit = _visibleCount.value)
-                        sessionRepository.deleteMessage(userMessageId)
-                    } else {
-                        // Stream never started — delete local user message.
-                        sessionRepository.deleteMessage(userMessageId)
                     }
+                    _pendingMessage.value = null
                 }
                 throw e
             } catch (e: Exception) {
                 _error.value = friendlyError(e)
-                // Don't delete the local user message — the user can see
-                // what they tried to send and retry.
             } finally {
                 _isStreaming.value = false
                 _streamingContent.value = ""
@@ -390,12 +321,6 @@ class ChatViewModel(
         }
     }
 
-    /**
-     * Stop the active stream. Cancels the stream job and tells the
-     * server to stop generating. The catch(CancellationException) block
-     * in [startStream] handles the cleanup (loadSession + delete local
-     * message) in a NonCancellable context.
-     */
     fun stopStreaming() {
         streamJob?.cancel()
         streamJob = null
