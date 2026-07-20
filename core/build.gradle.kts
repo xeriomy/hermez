@@ -34,11 +34,11 @@ dependencies {
     // Networking (Ktor 3.x — ktor-client-sse was renamed to ktor-sse)
     // ARCH-3 fix: ktor-client-core is 'api' because ChatStream's public API
     // references HttpClient types. app module shouldn't need to redeclare it.
-    api("io.ktor:ktor-client-core:3.0.3")
-    implementation("io.ktor:ktor-client-okhttp:3.0.3")
-    implementation("io.ktor:ktor-client-content-negotiation:3.0.3")
-    implementation("io.ktor:ktor-serialization-kotlinx-json:3.0.3")
-    implementation("io.ktor:ktor-sse:3.0.3")
+    api("io.ktor:ktor-client-core:3.5.1")
+    implementation("io.ktor:ktor-client-okhttp:3.5.1")
+    implementation("io.ktor:ktor-client-content-negotiation:3.5.1")
+    implementation("io.ktor:ktor-serialization-kotlinx-json:3.5.1")
+    implementation("io.ktor:ktor-sse:3.5.1")
 
     // Serialization
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
@@ -59,7 +59,7 @@ dependencies {
 
     // Testing
     testImplementation("junit:junit:4.13.2")
-    testImplementation("io.ktor:ktor-client-mock:3.0.3")
+    testImplementation("io.ktor:ktor-client-mock:3.5.1")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
     androidTestImplementation("androidx.test.ext:junit:1.1.5")
 }
